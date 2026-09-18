@@ -1,0 +1,5 @@
+spec/
+node_modules/
+dist/
+*.sqlite
+*.sqlite.tmp
