@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import 'sqlite_app_repository.dart';
@@ -15,11 +16,17 @@ class StorageManager {
   static const _uuid = Uuid();
 
   static Future<StorageManager> load() async {
-    final appData =
-        Platform.environment['APPDATA'] ??
-        Platform.environment['LOCALAPPDATA'] ??
-        Directory.current.path;
-    final config = Directory(p.join(appData, 'com.localfirst', 'its_app'));
+    final config = Platform.isAndroid
+        ? await getApplicationSupportDirectory()
+        : Directory(
+            p.join(
+              Platform.environment['APPDATA'] ??
+                  Platform.environment['LOCALAPPDATA'] ??
+                  Directory.current.path,
+              'com.localfirst',
+              'its_app',
+            ),
+          );
     await config.create(recursive: true);
     final preferences = File(p.join(config.path, 'settings.json'));
     var root = config.path;

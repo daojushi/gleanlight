@@ -6,9 +6,11 @@ import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart' as mobile;
 import 'package:uuid/uuid.dart';
 
 import '../domain/models.dart';
+import '../sync/sync_conflict.dart';
 import 'app_repository.dart';
 
 class SqliteAppRepository implements AppRepository {
@@ -56,14 +58,16 @@ class SqliteAppRepository implements AppRepository {
 
   @override
   Future<void> initialize() async {
-    sqfliteFfiInit();
-    final selectedFactory = factory ?? databaseFactoryFfi;
+    if (!Platform.isAndroid) sqfliteFfiInit();
+    final selectedFactory =
+        factory ??
+        (Platform.isAndroid ? mobile.databaseFactory : databaseFactoryFfi);
     final path = databasePath ?? await _defaultDatabasePath();
     _openedPath = path;
     _db = await selectedFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, _) async {
           await db.execute(
@@ -91,9 +95,11 @@ class SqliteAppRepository implements AppRepository {
             'CREATE INDEX idx_schedules_date ON schedules(date, start_time)',
           );
           await _createAttachments(db);
+          await _createSyncTables(db);
         },
         onUpgrade: (db, oldVersion, _) async {
           if (oldVersion < 2) await _createAttachments(db);
+          if (oldVersion < 3) await _createSyncTables(db);
         },
       ),
     );
@@ -101,6 +107,10 @@ class SqliteAppRepository implements AppRepository {
 
   Future<void> _createAttachments(DatabaseExecutor db) => db.execute(
     'CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, mime_type TEXT NOT NULL, file_name TEXT NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL, local_path TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)',
+  );
+
+  Future<void> _createSyncTables(DatabaseExecutor db) => db.execute(
+    'CREATE TABLE IF NOT EXISTS sync_conflicts (id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, local_json TEXT NOT NULL, remote_json TEXT NOT NULL, source_device TEXT NOT NULL, created_at TEXT NOT NULL)',
   );
 
   Future<String> _defaultDatabasePath() async {
@@ -479,6 +489,180 @@ class SqliteAppRepository implements AppRepository {
       where: 'id=?',
       whereArgs: [id],
     );
+  }
+
+  /// Vendor-neutral snapshot used by pluggable sync providers.
+  Future<Map<String, dynamic>> exportSyncSnapshot() async {
+    final result = <String, dynamic>{};
+    for (final table in const [
+      'ideas',
+      'tasks',
+      'schedules',
+      'topics',
+      'attachments',
+      'entity_topics',
+    ]) {
+      result[table] = await _db.query(table);
+    }
+    return result;
+  }
+
+  /// Merges a remote snapshot with deterministic last-write-wins semantics.
+  /// Equal timestamps with different values are retained in sync_conflicts.
+  Future<int> mergeSyncSnapshot(
+    Map<String, dynamic> snapshot, {
+    required String sourceDevice,
+  }) async {
+    var changes = 0;
+    await _db.transaction((txn) async {
+      for (final table in const ['ideas', 'tasks', 'schedules', 'topics']) {
+        final remoteRows = (snapshot[table] as List? ?? const [])
+            .cast<Map>()
+            .map((row) => row.cast<String, Object?>());
+        for (final remote in remoteRows) {
+          final local = await txn.query(
+            table,
+            where: 'id=?',
+            whereArgs: [remote['id']],
+          );
+          final remoteTime = DateTime.parse(remote['updated_at']! as String);
+          final localTime = local.isEmpty
+              ? null
+              : DateTime.parse(local.first['updated_at']! as String);
+          if (localTime != null &&
+              remoteTime.isAtSameMomentAs(localTime) &&
+              jsonEncode(local.first) != jsonEncode(remote)) {
+            await txn.insert('sync_conflicts', {
+              'id': _uuid.v4(),
+              'entity_type': table,
+              'entity_id': remote['id'],
+              'local_json': jsonEncode(local.first),
+              'remote_json': jsonEncode(remote),
+              'source_device': sourceDevice,
+              'created_at': DateTime.now().toUtc().toIso8601String(),
+            });
+          }
+          if (localTime == null || remoteTime.isAfter(localTime)) {
+            await txn.insert(
+              table,
+              remote,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+            changes++;
+          }
+        }
+      }
+      for (final remote
+          in (snapshot['attachments'] as List? ?? const []).cast<Map>().map(
+            (row) => row.cast<String, Object?>(),
+          )) {
+        final local = await txn.query(
+          'attachments',
+          where: 'id=?',
+          whereArgs: [remote['id']],
+        );
+        final remoteTime = DateTime.parse(remote['updated_at']! as String);
+        final localTime = local.isEmpty
+            ? null
+            : DateTime.parse(local.first['updated_at']! as String);
+        if (localTime == null || remoteTime.isAfter(localTime)) {
+          // local_path is device-specific and is filled after the file download.
+          final row = Map<String, Object?>.from(remote);
+          row['local_path'] = local.isEmpty
+              ? p.join(
+                  storageRoot,
+                  'attachments',
+                  '${remote['id']}${p.extension(remote['file_name']! as String)}',
+                )
+              : local.first['local_path'];
+          await txn.insert(
+            'attachments',
+            row,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          changes++;
+        }
+      }
+      // Relations are derived data. Union first; winning entity snapshots will
+      // naturally converge on the next upload without risking data loss.
+      for (final remote
+          in (snapshot['entity_topics'] as List? ?? const []).cast<Map>().map(
+            (row) => row.cast<String, Object?>(),
+          )) {
+        await txn.insert(
+          'entity_topics',
+          remote,
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+    });
+    return changes;
+  }
+
+  Future<List<Map<String, Object?>>> syncAttachments() =>
+      _db.query('attachments', where: 'deleted_at IS NULL');
+
+  Future<void> ensureSyncAttachment(String id, List<int> bytes) async {
+    final rows = await _db.query('attachments', where: 'id=?', whereArgs: [id]);
+    if (rows.isEmpty) return;
+    final file = File(rows.first['local_path']! as String);
+    if (!await file.exists()) {
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes, flush: true);
+    }
+  }
+
+  Future<List<SyncConflict>> listSyncConflicts() async {
+    final rows = await _db.query('sync_conflicts', orderBy: 'created_at DESC');
+    return rows
+        .map(
+          (row) => SyncConflict(
+            id: row['id']! as String,
+            entityType: row['entity_type']! as String,
+            entityId: row['entity_id']! as String,
+            local: (jsonDecode(row['local_json']! as String) as Map)
+                .cast<String, dynamic>(),
+            remote: (jsonDecode(row['remote_json']! as String) as Map)
+                .cast<String, dynamic>(),
+            sourceDevice: row['source_device']! as String,
+            createdAt: DateTime.parse(row['created_at']! as String),
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> resolveSyncConflict(
+    String conflictId, {
+    required bool useRemote,
+  }) async {
+    const allowed = {'ideas', 'tasks', 'schedules', 'topics'};
+    await _db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_conflicts',
+        where: 'id=?',
+        whereArgs: [conflictId],
+      );
+      if (rows.isEmpty) return;
+      final conflict = rows.single;
+      final table = conflict['entity_type']! as String;
+      if (!allowed.contains(table)) throw StateError('不支持的冲突实体：$table');
+      final chosen = (jsonDecode(
+        (useRemote ? conflict['remote_json'] : conflict['local_json'])!
+            as String,
+      ) as Map).cast<String, Object?>();
+      // A resolution is a new local change and must win on the next sync.
+      chosen['updated_at'] = DateTime.now().toUtc().toIso8601String();
+      await txn.insert(
+        table,
+        chosen,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.delete(
+        'sync_conflicts',
+        where: 'id=?',
+        whereArgs: [conflictId],
+      );
+    });
   }
 
   @override

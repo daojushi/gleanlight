@@ -9,10 +9,11 @@ import 'package:window_manager/window_manager.dart';
 
 class DesktopIntegration with TrayListener {
   DesktopIntegration(this.captureRequests);
-  final ValueNotifier<int> captureRequests;
+  final ValueNotifier<String?> captureRequests;
   late final HotKey _captureHotKey;
 
   Future<void> initialize() async {
+    if (!Platform.isWindows) return;
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(
       const WindowOptions(
@@ -62,7 +63,7 @@ class DesktopIntegration with TrayListener {
   Future<void> showCapture() async {
     await windowManager.show();
     await windowManager.focus();
-    captureRequests.value++;
+    captureRequests.value = '';
   }
 
   @override

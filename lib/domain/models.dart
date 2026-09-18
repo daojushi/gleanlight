@@ -5,7 +5,7 @@ enum TaskStatus { todo, doing, done }
 extension IdeaStatusX on IdeaStatus {
   String get dbValue =>
       const ['New', 'Thinking', 'Ready', 'Implemented', 'Shelved'][index];
-  String get label => const ['新想法', '思考中', '准备实践', '已实现', '搁置'][index];
+  String get label => const ['新想法', '思考中', '实践中', '已实现', '搁置'][index];
   static IdeaStatus fromDb(String value) => IdeaStatus.values.firstWhere(
     (status) => status.dbValue == value,
     orElse: () => IdeaStatus.newIdea,

@@ -80,6 +80,82 @@ void main() {
     expect(aggregate.schedules, hasLength(1));
   });
 
+  test('sync snapshot merges newer records and keeps tombstones', () async {
+    final directory = await Directory.systemTemp.createTemp('its-sync-test-');
+    final source = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: '${directory.path}\\source.sqlite',
+    );
+    final target = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: '${directory.path}\\target.sqlite',
+    );
+    try {
+      await source.initialize();
+      await target.initialize();
+      final id = await source.saveIdea(
+        content: '跨设备内容',
+        status: IdeaStatus.thinking,
+        topicIds: const [],
+      );
+      var snapshot = await source.exportSyncSnapshot();
+      expect(
+        await target.mergeSyncSnapshot(snapshot, sourceDevice: 'phone'),
+        1,
+      );
+      expect((await target.listIdeas()).single.content, '跨设备内容');
+
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await source.softDelete('idea', id);
+      snapshot = await source.exportSyncSnapshot();
+      expect(
+        await target.mergeSyncSnapshot(snapshot, sourceDevice: 'phone'),
+        1,
+      );
+      expect(await target.listIdeas(), isEmpty);
+    } finally {
+      await source.close();
+      await target.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test('equal-time sync conflict can be resolved explicitly', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'its-conflict-test-',
+    );
+    final repo = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: '${directory.path}\\conflict.sqlite',
+    );
+    try {
+      await repo.initialize();
+      final id = await repo.saveIdea(
+        content: '本机版本',
+        status: IdeaStatus.newIdea,
+        topicIds: const [],
+      );
+      final snapshot = await repo.exportSyncSnapshot();
+      final remote = Map<String, dynamic>.from(snapshot);
+      remote['ideas'] = (snapshot['ideas'] as List)
+          .map(
+            (row) =>
+                Map<String, Object?>.from(row as Map)..['content'] = '远程版本',
+          )
+          .toList();
+      await repo.mergeSyncSnapshot(remote, sourceDevice: 'phone');
+      final conflicts = await repo.listSyncConflicts();
+      expect(conflicts, hasLength(1));
+      expect(conflicts.single.entityId, id);
+      await repo.resolveSyncConflict(conflicts.single.id, useRemote: true);
+      expect((await repo.listIdeas()).single.content, '远程版本');
+      expect(await repo.listSyncConflicts(), isEmpty);
+    } finally {
+      await repo.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('stores image attachment and exports backup zip', () async {
     final directory = await Directory.systemTemp.createTemp('its-p1-test-');
     SqliteAppRepository? repo;

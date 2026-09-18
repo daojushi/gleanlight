@@ -1,14 +1,28 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/app_repository.dart';
 import '../data/sqlite_app_repository.dart';
 import '../data/storage_manager.dart';
 import '../domain/models.dart';
+import '../sync/sync_provider.dart';
+import '../sync/sync_conflict.dart';
 
 class AppController extends ChangeNotifier {
-  AppController(this.repository, this.storageManager);
+  AppController(
+    this.repository,
+    this.storageManager,
+    this.syncProvider,
+    this.supabase,
+  );
   AppRepository repository;
   final StorageManager storageManager;
+  final SyncProvider syncProvider;
+  final SupabaseClient? supabase;
+  SyncState syncState = const SyncState(SyncPhase.disabled);
+  StreamSubscription<SyncState>? _syncSubscription;
   bool loading = true;
   Object? error;
   List<Idea> ideas = const [];
@@ -19,12 +33,65 @@ class AppController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       await repository.initialize();
+      syncState = syncProvider.state;
+      _syncSubscription = syncProvider.states.listen((value) {
+        syncState = value;
+        notifyListeners();
+      });
+      await syncProvider.start();
       await reload();
     } catch (e) {
       error = e;
       loading = false;
       notifyListeners();
     }
+  }
+
+  User? get currentUser => supabase?.auth.currentUser;
+  Future<void> signIn(String email, String password) async {
+    final client = supabase;
+    if (client == null) throw StateError('请先保存 Supabase 配置并重启应用');
+    await client.auth.signInWithPassword(
+      email: email.trim(),
+      password: password,
+    );
+    await syncNow();
+  }
+
+  Future<void> signUp(String email, String password) async {
+    final client = supabase;
+    if (client == null) throw StateError('请先保存 Supabase 配置并重启应用');
+    await client.auth.signUp(email: email.trim(), password: password);
+    notifyListeners();
+  }
+
+  Future<void> signOut() async {
+    await supabase?.auth.signOut();
+    notifyListeners();
+  }
+
+  Future<void> syncNow() async {
+    await syncProvider.sync();
+    await reload();
+  }
+
+  Future<List<SyncConflict>> syncConflicts() async {
+    final repo = repository;
+    return repo is SqliteAppRepository ? repo.listSyncConflicts() : const [];
+  }
+
+  Future<void> resolveSyncConflict(String id, {required bool useRemote}) async {
+    final repo = repository;
+    if (repo is! SqliteAppRepository) return;
+    await repo.resolveSyncConflict(id, useRemote: useRemote);
+    await reload();
+  }
+
+  @override
+  void dispose() {
+    _syncSubscription?.cancel();
+    syncProvider.stop();
+    super.dispose();
   }
 
   Future<void> reload() async {
@@ -83,6 +150,16 @@ class AppController extends ChangeNotifier {
     );
     await reload();
     return id;
+  }
+
+  Future<void> updateIdeaStatus(Idea idea, IdeaStatus status) async {
+    await repository.saveIdea(
+      id: idea.id,
+      content: idea.content,
+      status: status,
+      topicIds: idea.topics.map((topic) => topic.id).toList(),
+    );
+    await reload();
   }
 
   Future<void> saveTask({

@@ -9,16 +9,21 @@ import 'package:intl/intl.dart';
 import 'package:pasteboard/pasteboard.dart';
 
 import '../app/app_controller.dart';
+import '../app/appearance_settings.dart';
 import '../domain/models.dart';
+import '../sync/sync_config.dart';
+import '../sync/sync_provider.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
     super.key,
     required this.controller,
     required this.captureRequests,
+    required this.appearance,
   });
   final AppController controller;
-  final ValueNotifier<int> captureRequests;
+  final ValueNotifier<String?> captureRequests;
+  final AppearanceSettings appearance;
   @override
   State<AppShell> createState() => _AppShellState();
 }
@@ -51,8 +56,9 @@ class _AppShellState extends State<AppShell> {
   Future<void> _export() async {
     final directory = await FilePicker.getDirectoryPath(dialogTitle: '选择备份目录');
     if (directory == null) return;
+    final separator = Platform.pathSeparator;
     final path =
-        '$directory\\its-backup-${DateFormat('yyyyMMdd-HHmm').format(DateTime.now())}.zip';
+        '$directory${separator}its-backup-${DateFormat('yyyyMMdd-HHmm').format(DateTime.now())}.zip';
     try {
       final output = await c.exportBackup(
         path.toLowerCase().endsWith('.zip') ? path : '$path.zip',
@@ -89,6 +95,61 @@ class _AppShellState extends State<AppShell> {
             ],
           ),
         ),
+      );
+    }
+    final mobile = MediaQuery.sizeOf(context).width < 760;
+    final content = c.loading
+        ? const Center(child: CircularProgressIndicator())
+        : IndexedStack(
+            index: index,
+            children: [
+              CapturePage(
+                controller: c,
+                onMessage: message,
+                captureRequests: widget.captureRequests,
+              ),
+              IdeasPage(controller: c, onMessage: message),
+              TasksPage(controller: c, onMessage: message),
+              SchedulesPage(controller: c, onMessage: message),
+              TopicsPage(controller: c, onMessage: message),
+              SettingsPage(
+                controller: c,
+                appearance: widget.appearance,
+                onMessage: message,
+              ),
+            ],
+          );
+    if (mobile) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(_nav[index].$1),
+          actions: [
+            IconButton(
+              tooltip: '设置',
+              onPressed: () => setState(() => index = 5),
+              icon: const Icon(Icons.settings_outlined),
+            ),
+          ],
+        ),
+        body: SafeArea(child: content),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: index > 4 ? 0 : index,
+          onDestinationSelected: (value) => setState(() => index = value),
+          destinations: _nav
+              .take(5)
+              .map(
+                (item) =>
+                    NavigationDestination(icon: Icon(item.$2), label: item.$1),
+              )
+              .toList(),
+        ),
+        floatingActionButton: index == 0
+            ? null
+            : FloatingActionButton(
+                tooltip: '快速记录 Idea',
+                onPressed: () => setState(() => index = 0),
+                child: const Icon(Icons.add_rounded),
+              ),
       );
     }
     return Scaffold(
@@ -186,21 +247,7 @@ class _AppShellState extends State<AppShell> {
               ],
             ),
           ),
-          Expanded(
-            child: c.loading
-                ? const Center(child: CircularProgressIndicator())
-                : IndexedStack(
-                    index: index,
-                    children: [
-                      CapturePage(controller: c, onMessage: message),
-                      IdeasPage(controller: c, onMessage: message),
-                      TasksPage(controller: c, onMessage: message),
-                      SchedulesPage(controller: c, onMessage: message),
-                      TopicsPage(controller: c, onMessage: message),
-                      SettingsPage(controller: c, onMessage: message),
-                    ],
-                  ),
-          ),
+          Expanded(child: content),
         ],
       ),
     );
@@ -229,57 +276,62 @@ class PageFrame extends StatelessWidget {
   final Widget child;
   final Widget? action;
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    padding: const EdgeInsets.fromLTRB(64, 44, 64, 60),
-    child: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1040),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        kicker,
-                        style: const TextStyle(
-                          color: Color(0xff27634d),
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.5,
+  Widget build(BuildContext context) {
+    final mobile = MediaQuery.sizeOf(context).width < 760;
+    return SingleChildScrollView(
+      padding: mobile
+          ? const EdgeInsets.fromLTRB(16, 14, 16, 90)
+          : const EdgeInsets.fromLTRB(64, 44, 64, 60),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1040),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          kicker,
+                          style: const TextStyle(
+                            color: Color(0xff27634d),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.5,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.headlineLarge
-                            ?.copyWith(
-                              fontFamily: 'Georgia',
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(color: Colors.black54),
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.headlineLarge
+                              ?.copyWith(
+                                fontFamily: 'Georgia',
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: const TextStyle(color: Colors.black54),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                ?action,
-              ],
-            ),
-            const SizedBox(height: 28),
-            child,
-          ],
+                  ?action,
+                ],
+              ),
+              const SizedBox(height: 28),
+              child,
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class CapturePage extends StatefulWidget {
@@ -287,9 +339,11 @@ class CapturePage extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onMessage,
+    required this.captureRequests,
   });
   final AppController controller;
   final void Function(Object) onMessage;
+  final ValueNotifier<String?> captureRequests;
   @override
   State<CapturePage> createState() => _CapturePageState();
 }
@@ -300,7 +354,23 @@ class _CapturePageState extends State<CapturePage> {
   bool preview = false;
   final attachments = <PendingAttachment>[];
   @override
+  void initState() {
+    super.initState();
+    widget.captureRequests.addListener(_acceptShare);
+  }
+
+  void _acceptShare() {
+    final value = widget.captureRequests.value;
+    if (value != null && value.trim().isNotEmpty) {
+      text.text = value;
+      text.selection = TextSelection.collapsed(offset: text.text.length);
+      widget.captureRequests.value = null;
+    }
+  }
+
+  @override
   void dispose() {
+    widget.captureRequests.removeListener(_acceptShare);
     text.dispose();
     super.dispose();
   }
@@ -332,20 +402,18 @@ class _CapturePageState extends State<CapturePage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> pasteImage() async {
-    final bytes = await Pasteboard.image;
-    if (bytes == null) {
-      widget.onMessage('剪贴板中没有图片');
-      return;
+  Future<void> pasteClipboard() async {
+    try {
+      final attachment = await _imageFromClipboard();
+      if (attachment != null) {
+        attachments.add(attachment);
+        if (mounted) setState(() {});
+        return;
+      }
+      await _pasteClipboardText(text);
+    } catch (e) {
+      widget.onMessage('粘贴失败：$e');
     }
-    attachments.add(
-      PendingAttachment(
-        'clipboard-${DateTime.now().millisecondsSinceEpoch}.png',
-        'image/png',
-        bytes,
-      ),
-    );
-    setState(() {});
   }
 
   Future<void> addDropped(List<DropItem> files) async {
@@ -364,133 +432,148 @@ class _CapturePageState extends State<CapturePage> {
   }
 
   @override
-  Widget build(BuildContext context) => PageFrame(
-    kicker: 'QUICK CAPTURE',
-    title: '刚刚想到了什么？',
-    subtitle: '先记下来，整理可以留给以后。',
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 800),
-      child: DropTarget(
-        onDragDone: (detail) => addDropped(detail.files),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(
-              children: [
-                if (preview)
-                  SizedBox(
-                    height: 260,
-                    child: Markdown(
-                      data: text.text.isEmpty ? '*暂无内容*' : text.text,
-                    ),
-                  )
-                else
-                  Shortcuts(
-                    shortcuts: const {
-                      SingleActivator(LogicalKeyboardKey.enter, control: true):
-                          ActivateIntent(),
-                    },
-                    child: Actions(
-                      actions: {
-                        ActivateIntent: CallbackAction<ActivateIntent>(
-                          onInvoke: (_) {
-                            save();
-                            return null;
-                          },
-                        ),
+  Widget build(BuildContext context) {
+    final mobile = MediaQuery.sizeOf(context).width < 760;
+    return PageFrame(
+      kicker: 'QUICK CAPTURE',
+      title: '刚刚想到了什么？',
+      subtitle: '先记下来，整理可以留给以后。',
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 800),
+        child: DropTarget(
+          onDragDone: (detail) => addDropped(detail.files),
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(mobile ? 16 : 28),
+              child: Column(
+                children: [
+                  if (preview)
+                    SizedBox(
+                      height: 260,
+                      child: Markdown(
+                        data: text.text.isEmpty ? '*暂无内容*' : text.text,
+                      ),
+                    )
+                  else
+                    Shortcuts(
+                      shortcuts: const {
+                        SingleActivator(
+                          LogicalKeyboardKey.enter,
+                          control: true,
+                        ): ActivateIntent(),
                       },
-                      child: TextField(
-                        controller: text,
-                        autofocus: true,
-                        minLines: 8,
-                        maxLines: null,
-                        decoration: const InputDecoration(
-                          hintText: '写下你的想法……\n\n支持多段文字和换行。',
-                          border: InputBorder.none,
+                      child: Actions(
+                        actions: {
+                          ActivateIntent: CallbackAction<ActivateIntent>(
+                            onInvoke: (_) {
+                              save();
+                              return null;
+                            },
+                          ),
+                        },
+                        child: CallbackShortcuts(
+                          bindings: {
+                            const SingleActivator(
+                              LogicalKeyboardKey.keyV,
+                              control: true,
+                            ): pasteClipboard,
+                          },
+                          child: TextField(
+                            controller: text,
+                            autofocus: true,
+                            minLines: 8,
+                            maxLines: null,
+                            decoration: const InputDecoration(
+                              hintText: '写下你的想法……\n\n支持多段文字、换行，Ctrl+V 可直接粘贴图片。',
+                              border: InputBorder.none,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (attachments.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: attachments
+                            .asMap()
+                            .entries
+                            .map(
+                              (entry) => Stack(
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.memory(
+                                      entry.value.bytes,
+                                      width: 90,
+                                      height: 70,
+                                      fit: BoxFit.cover,
+                                    ),
+                                  ),
+                                  Positioned(
+                                    right: 0,
+                                    child: IconButton.filledTonal(
+                                      visualDensity: VisualDensity.compact,
+                                      onPressed: () => setState(
+                                        () => attachments.removeAt(entry.key),
+                                      ),
+                                      icon: const Icon(Icons.close, size: 14),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  const Divider(height: 32),
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      TextButton.icon(
+                        onPressed: pickImages,
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('添加图片'),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => setState(() => preview = !preview),
+                        icon: const Icon(Icons.visibility_outlined),
+                        label: Text(preview ? '继续编辑' : 'Markdown 预览'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: saving ? null : save,
+                        icon: const Icon(Icons.save_outlined),
+                        label: Text(saving ? '保存中…' : '保存 Idea'),
+                      ),
+                    ],
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        mobile
+                            ? '图片保存在本机；联网同步为可选功能'
+                            : '也可以把图片直接拖到这里 · Ctrl+Shift+Space 全局唤起',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black45,
                         ),
                       ),
                     ),
                   ),
-                if (attachments.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: attachments
-                          .asMap()
-                          .entries
-                          .map(
-                            (entry) => Stack(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.memory(
-                                    entry.value.bytes,
-                                    width: 90,
-                                    height: 70,
-                                    fit: BoxFit.cover,
-                                  ),
-                                ),
-                                Positioned(
-                                  right: 0,
-                                  child: IconButton.filledTonal(
-                                    visualDensity: VisualDensity.compact,
-                                    onPressed: () => setState(
-                                      () => attachments.removeAt(entry.key),
-                                    ),
-                                    icon: const Icon(Icons.close, size: 14),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                          .toList(),
-                    ),
-                  ),
-                const Divider(height: 32),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: pickImages,
-                      icon: const Icon(Icons.image_outlined),
-                      label: const Text('添加图片'),
-                    ),
-                    TextButton.icon(
-                      onPressed: pasteImage,
-                      icon: const Icon(Icons.content_paste),
-                      label: const Text('粘贴截图'),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => setState(() => preview = !preview),
-                      icon: const Icon(Icons.visibility_outlined),
-                      label: Text(preview ? '继续编辑' : 'Markdown 预览'),
-                    ),
-                    const Spacer(),
-                    FilledButton.icon(
-                      onPressed: saving ? null : save,
-                      icon: const Icon(Icons.save_outlined),
-                      label: Text(saving ? '保存中…' : '保存 Idea'),
-                    ),
-                  ],
-                ),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: Text(
-                      '也可以把图片直接拖到这里 · Ctrl+Shift+Space 全局唤起',
-                      style: TextStyle(fontSize: 12, color: Colors.black45),
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 bool _isImage(String name) => [
@@ -508,6 +591,56 @@ String _mime(String name) {
   if (lower.endsWith('.webp')) return 'image/webp';
   if (lower.endsWith('.bmp')) return 'image/bmp';
   return 'image/png';
+}
+
+Future<PendingAttachment?> _imageFromClipboard() async {
+  Object? imageError;
+  try {
+    final bytes = await Pasteboard.image;
+    if (bytes != null && bytes.isNotEmpty) {
+      return PendingAttachment(
+        'clipboard-${DateTime.now().millisecondsSinceEpoch}.png',
+        'image/png',
+        bytes,
+      );
+    }
+  } catch (error) {
+    imageError = error;
+  }
+
+  // Windows may put a screenshot or copied image on the clipboard as a file
+  // instead of a bitmap. Supporting both forms makes paste work from Explorer
+  // and from screenshot tools that expose a temporary file.
+  try {
+    final files = await Pasteboard.files();
+    for (final path in files) {
+      if (!_isImage(path)) continue;
+      final file = File(path);
+      if (!await file.exists()) continue;
+      return PendingAttachment(
+        file.uri.pathSegments.last,
+        _mime(path),
+        await file.readAsBytes(),
+      );
+    }
+  } catch (error) {
+    imageError ??= error;
+  }
+  if (imageError != null) throw imageError;
+  return null;
+}
+
+Future<void> _pasteClipboardText(TextEditingController controller) async {
+  final data = await Clipboard.getData(Clipboard.kTextPlain);
+  final value = data?.text;
+  if (value == null || value.isEmpty) return;
+  final selection = controller.selection;
+  final start = selection.isValid ? selection.start : controller.text.length;
+  final end = selection.isValid ? selection.end : controller.text.length;
+  controller.value = TextEditingValue(
+    text: controller.text.replaceRange(start, end, value),
+    selection: TextSelection.collapsed(offset: start + value.length),
+  );
 }
 
 class IdeasPage extends StatelessWidget {
@@ -548,8 +681,28 @@ class IdeasPage extends StatelessWidget {
                       (idea) => EntityCard(
                         title: idea.content,
                         markdown: true,
+                        onCopy: () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: idea.content),
+                          );
+                          onMessage('灵感已复制');
+                        },
                         attachments: idea.attachments,
                         status: idea.status.label,
+                        statusChoices: IdeaStatus.values
+                            .map((value) => value.label)
+                            .toList(),
+                        onStatusChanged: (label) async {
+                          final next = IdeaStatus.values.firstWhere(
+                            (value) => value.label == label,
+                          );
+                          try {
+                            await controller.updateIdeaStatus(idea, next);
+                            onMessage('状态已更新为 ${next.label}');
+                          } catch (e) {
+                            onMessage(e);
+                          }
+                        },
                         topics: idea.topics,
                         trailing:
                             '创建于 ${DateFormat('MM/dd HH:mm').format(idea.createdAt.toLocal())}',
@@ -754,9 +907,11 @@ class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
     required this.controller,
+    required this.appearance,
     required this.onMessage,
   });
   final AppController controller;
+  final AppearanceSettings appearance;
   final void Function(Object) onMessage;
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -764,6 +919,31 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool moving = false;
+  bool savingSync = false;
+  final syncUrl = TextEditingController();
+  final syncKey = TextEditingController();
+  final email = TextEditingController();
+  final password = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    SyncConfig.load().then((value) {
+      syncUrl.text = value.url;
+      syncKey.text = value.anonKey;
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    syncUrl.dispose();
+    syncKey.dispose();
+    email.dispose();
+    password.dispose();
+    super.dispose();
+  }
+
   Future<void> chooseStorage() async {
     final selected = await FilePicker.getDirectoryPath(dialogTitle: '选择新的存储位置');
     if (selected == null || !mounted) return;
@@ -815,51 +995,266 @@ class _SettingsPageState extends State<SettingsPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '存储位置',
+                  '界面字体',
                   style: Theme.of(context).textTheme.titleMedium
                       ?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  '数据库、图片附件和导出源文件均保存在此目录。设置本身固定保存在系统 AppData，应用重启后会自动加载所选位置。',
+                  '选择内置的系统字体，或导入一个 TTF/OTF 字体文件。',
                   style: TextStyle(color: Colors.black54),
                 ),
                 const SizedBox(height: 14),
-                SelectableText(
-                  widget.controller.storageLocation,
-                  style: const TextStyle(fontFamily: 'Consolas'),
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: moving ? null : chooseStorage,
-                  icon: moving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.drive_file_move_outline),
-                  label: Text(moving ? '正在迁移…' : '修改存储位置'),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    DropdownButton<String>(
+                      value: widget.appearance.selectedId == 'custom'
+                          ? 'custom'
+                          : widget.appearance.selectedId,
+                      items: [
+                        ...AppearanceSettings.choices.map(
+                          (choice) => DropdownMenuItem(
+                            value: choice.id,
+                            child: Text(choice.label),
+                          ),
+                        ),
+                        if (widget.appearance.customFontPath != null)
+                          const DropdownMenuItem(
+                            value: 'custom',
+                            child: Text('已导入字体'),
+                          ),
+                      ],
+                      onChanged: (value) async {
+                        if (value == null || value == 'custom') return;
+                        await widget.appearance.select(value);
+                        if (mounted) setState(() {});
+                      },
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final result = await FilePicker.pickFiles(
+                          type: FileType.custom,
+                          allowedExtensions: const ['ttf', 'otf'],
+                        );
+                        if (result.isEmpty || result.single.path == null) {
+                          return;
+                        }
+                        try {
+                          await widget.appearance.importFont(
+                            result.single.path!,
+                          );
+                          if (mounted) setState(() {});
+                          widget.onMessage('字体已导入并应用');
+                        } catch (e) {
+                          widget.onMessage('字体导入失败：$e');
+                        }
+                      },
+                      icon: const Icon(Icons.font_download_outlined),
+                      label: const Text('导入字体'),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
         const SizedBox(height: 14),
-        const Card(
+        if (!Platform.isAndroid)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '存储位置',
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '数据库、图片附件和导出源文件均保存在此目录。设置本身固定保存在系统 AppData，应用重启后会自动加载所选位置。',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 14),
+                  SelectableText(
+                    widget.controller.storageLocation,
+                    style: const TextStyle(fontFamily: 'Consolas'),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: moving ? null : chooseStorage,
+                    icon: moving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.drive_file_move_outline),
+                    label: Text(moving ? '正在迁移…' : '修改存储位置'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        const SizedBox(height: 14),
+        if (!Platform.isAndroid)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '桌面功能',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    '全局快捷键：Ctrl + Shift + Space\n系统托盘：单击图标快速打开记录页',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (!Platform.isAndroid) const SizedBox(height: 14),
+        Card(
           child: Padding(
-            padding: EdgeInsets.all(22),
+            padding: const EdgeInsets.all(22),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '桌面功能',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  '跨设备同步',
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
-                SizedBox(height: 8),
-                Text(
-                  '全局快捷键：Ctrl + Shift + Space\n系统托盘：单击图标快速打开记录页',
+                const SizedBox(height: 8),
+                const Text(
+                  '本地功能始终离线可用。填写自己的 Supabase 项目后，可在 Windows 与 Android 间同步；云端可随时替换。',
                   style: TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: syncUrl,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(labelText: 'Supabase URL'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: syncKey,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Anon / publishable key',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                FilledButton.tonal(
+                  onPressed: savingSync
+                      ? null
+                      : () async {
+                          setState(() => savingSync = true);
+                          await SyncConfig(
+                            url: syncUrl.text,
+                            anonKey: syncKey.text,
+                          ).save();
+                          if (mounted) setState(() => savingSync = false);
+                          widget.onMessage('同步配置已保存，重启应用后生效');
+                        },
+                  child: const Text('保存同步配置'),
+                ),
+                const Divider(height: 32),
+                if (widget.controller.supabase == null)
+                  const Text('同步未启用', style: TextStyle(color: Colors.black54))
+                else if (widget.controller.currentUser != null) ...[
+                  Text(
+                    '已登录：${widget.controller.currentUser!.email ?? widget.controller.currentUser!.id}',
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed:
+                            widget.controller.syncState.phase ==
+                                SyncPhase.syncing
+                            ? null
+                            : () async {
+                                try {
+                                  await widget.controller.syncNow();
+                                } catch (e) {
+                                  widget.onMessage(e);
+                                }
+                              },
+                        icon: const Icon(Icons.sync),
+                        label: const Text('立即同步'),
+                      ),
+                      TextButton(
+                        onPressed: widget.controller.signOut,
+                        child: const Text('退出账户'),
+                      ),
+                    ],
+                  ),
+                ] else ...[
+                  TextField(
+                    controller: email,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(labelText: '邮箱'),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: password,
+                    obscureText: true,
+                    decoration: const InputDecoration(labelText: '密码'),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      FilledButton(
+                        onPressed: () async {
+                          try {
+                            await widget.controller.signIn(
+                              email.text,
+                              password.text,
+                            );
+                          } catch (e) {
+                            widget.onMessage(e);
+                          }
+                        },
+                        child: const Text('登录'),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          try {
+                            await widget.controller.signUp(
+                              email.text,
+                              password.text,
+                            );
+                            widget.onMessage('注册请求已提交，请按邮件提示确认');
+                          } catch (e) {
+                            widget.onMessage(e);
+                          }
+                        },
+                        child: const Text('注册'),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Text(
+                  _syncLabel(widget.controller.syncState),
+                  style: const TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () => _showConflicts(context),
+                  icon: const Icon(Icons.compare_arrows),
+                  label: const Text('查看同步冲突'),
                 ),
               ],
             ),
@@ -868,6 +1263,90 @@ class _SettingsPageState extends State<SettingsPage> {
       ],
     ),
   );
+
+  Future<void> _showConflicts(BuildContext context) async {
+    final conflicts = await widget.controller.syncConflicts();
+    if (!context.mounted) return;
+    if (conflicts.isEmpty) {
+      widget.onMessage('当前没有待处理冲突');
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('同步冲突（${conflicts.length}）'),
+        content: SizedBox(
+          width: 620,
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: conflicts.length,
+            separatorBuilder: (_, _) => const Divider(),
+            itemBuilder: (_, index) {
+              final conflict = conflicts[index];
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${conflict.entityType} · ${DateFormat('yyyy-MM-dd HH:mm').format(conflict.createdAt.toLocal())}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('本机：${conflict.localSummary}'),
+                  const SizedBox(height: 4),
+                  Text('其他设备：${conflict.remoteSummary}'),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      OutlinedButton(
+                        onPressed: () async {
+                          await widget.controller.resolveSyncConflict(
+                            conflict.id,
+                            useRemote: false,
+                          );
+                          if (dialogContext.mounted) {
+                            Navigator.pop(dialogContext);
+                          }
+                          widget.onMessage('已保留本机版本，将在下次同步上传');
+                        },
+                        child: const Text('保留本机'),
+                      ),
+                      FilledButton.tonal(
+                        onPressed: () async {
+                          await widget.controller.resolveSyncConflict(
+                            conflict.id,
+                            useRemote: true,
+                          );
+                          if (dialogContext.mounted) {
+                            Navigator.pop(dialogContext);
+                          }
+                          widget.onMessage('已采用其他设备版本');
+                        },
+                        child: const Text('采用其他设备'),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _syncLabel(SyncState state) {
+  final time = state.lastSyncedAt == null
+      ? ''
+      : ' · ${DateFormat('MM-dd HH:mm').format(state.lastSyncedAt!)}';
+  return '${state.message ?? state.phase.name}$time';
 }
 
 class TopicsPage extends StatefulWidget {
@@ -1078,6 +1557,9 @@ class EntityCard extends StatelessWidget {
     this.done = false,
     this.markdown = false,
     this.attachments = const [],
+    this.onCopy,
+    this.statusChoices = const [],
+    this.onStatusChanged,
   });
   final String title, description, status, trailing;
   final List<Topic> topics;
@@ -1085,6 +1567,9 @@ class EntityCard extends StatelessWidget {
   final bool done;
   final bool markdown;
   final List<Attachment> attachments;
+  final VoidCallback? onCopy;
+  final List<String> statusChoices;
+  final ValueChanged<String>? onStatusChanged;
   final VoidCallback onEdit, onDelete;
   @override
   Widget build(BuildContext context) => Padding(
@@ -1101,7 +1586,7 @@ class EntityCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (markdown)
-                    MarkdownBody(data: title)
+                    MarkdownBody(data: title, selectable: true)
                   else
                     Text(
                       title,
@@ -1120,22 +1605,29 @@ class EntityCard extends StatelessWidget {
                       children: attachments
                           .map(
                             (a) => Tooltip(
-                              message: a.fileName,
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.file(
-                                  File(a.localPath),
-                                  width: 110,
-                                  height: 80,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stack) =>
-                                      const SizedBox(
-                                        width: 110,
-                                        height: 80,
-                                        child: Icon(
-                                          Icons.broken_image_outlined,
-                                        ),
-                                      ),
+                              message: '点击放大 · ${a.fileName}',
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.click,
+                                child: GestureDetector(
+                                  onTap: () =>
+                                      _showAttachmentPreview(context, a),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.file(
+                                      File(a.localPath),
+                                      width: 110,
+                                      height: 80,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (context, error, stack) =>
+                                          const SizedBox(
+                                            width: 110,
+                                            height: 80,
+                                            child: Icon(
+                                              Icons.broken_image_outlined,
+                                            ),
+                                          ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
@@ -1156,10 +1648,36 @@ class EntityCard extends StatelessWidget {
                     runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Chip(
-                        label: Text(status),
-                        visualDensity: VisualDensity.compact,
-                      ),
+                      if (onStatusChanged != null)
+                        PopupMenuButton<String>(
+                          tooltip: '修改状态',
+                          initialValue: status,
+                          onSelected: onStatusChanged,
+                          itemBuilder: (context) => statusChoices
+                              .map(
+                                (item) => PopupMenuItem(
+                                  value: item,
+                                  child: Text(item),
+                                ),
+                              )
+                              .toList(),
+                          child: Chip(
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(status),
+                                const SizedBox(width: 2),
+                                const Icon(Icons.arrow_drop_down, size: 18),
+                              ],
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        )
+                      else
+                        Chip(
+                          label: Text(status),
+                          visualDensity: VisualDensity.compact,
+                        ),
                       ...topics.map(
                         (t) => Chip(
                           label: Text('# ${t.name}'),
@@ -1178,6 +1696,13 @@ class EntityCard extends StatelessWidget {
                 ],
               ),
             ),
+            if (onCopy != null)
+              IconButton(
+                onPressed: onCopy,
+                tooltip: '复制灵感',
+                color: Colors.black87,
+                icon: const _CopyIcon(),
+              ),
             IconButton(
               onPressed: onEdit,
               tooltip: '编辑',
@@ -1195,6 +1720,116 @@ class EntityCard extends StatelessWidget {
     ),
   );
 }
+
+class _CopyIcon extends StatelessWidget {
+  const _CopyIcon();
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+    size: const Size.square(20),
+    painter: _CopyIconPainter(IconTheme.of(context).color ?? Colors.black87),
+  );
+}
+
+class _CopyIconPainter extends CustomPainter {
+  const _CopyIconPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(3, 3, 11, 13),
+        const Radius.circular(1.5),
+      ),
+      paint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(7, 7, 10, 11),
+        const Radius.circular(1.5),
+      ),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CopyIconPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+Future<void> _showAttachmentPreview(
+  BuildContext context,
+  Attachment attachment,
+) => showDialog<void>(
+  context: context,
+  barrierColor: Colors.black87,
+  builder: (dialogContext) => Dialog(
+    backgroundColor: Colors.black,
+    insetPadding: const EdgeInsets.all(24),
+    child: SizedBox(
+      width: MediaQuery.sizeOf(dialogContext).width - 48,
+      height: MediaQuery.sizeOf(dialogContext).height - 48,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 8,
+              child: Center(
+                child: Image.file(
+                  File(attachment.localPath),
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stack) => const Center(
+                    child: Icon(
+                      Icons.broken_image_outlined,
+                      color: Colors.white70,
+                      size: 64,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton.filled(
+              onPressed: () => Navigator.pop(dialogContext),
+              tooltip: '关闭',
+              icon: const Icon(Icons.close),
+            ),
+          ),
+          Positioned(
+            left: 16,
+            bottom: 12,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                child: Text(
+                  '${attachment.fileName} · 滚轮缩放，拖动查看',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  ),
+);
 
 class EmptyCard extends StatelessWidget {
   const EmptyCard({super.key, required this.title, required this.subtitle});
@@ -1302,11 +1937,34 @@ Future<void> showIdeaDialog(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(
-                  controller: content,
-                  minLines: 6,
-                  maxLines: null,
-                  decoration: const InputDecoration(labelText: '内容'),
+                CallbackShortcuts(
+                  bindings: {
+                    const SingleActivator(
+                      LogicalKeyboardKey.keyV,
+                      control: true,
+                    ): () async {
+                      try {
+                        final attachment = await _imageFromClipboard();
+                        if (attachment != null) {
+                          pending.add(attachment);
+                          set(() {});
+                        } else {
+                          await _pasteClipboardText(content);
+                        }
+                      } catch (e) {
+                        message('粘贴失败：$e');
+                      }
+                    },
+                  },
+                  child: TextField(
+                    controller: content,
+                    minLines: 6,
+                    maxLines: null,
+                    decoration: const InputDecoration(
+                      labelText: '内容',
+                      helperText: 'Ctrl+V 可直接粘贴文字或图片',
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 14),
                 DropdownButtonFormField(
@@ -1362,25 +2020,6 @@ Future<void> showIdeaDialog(
                       },
                       icon: const Icon(Icons.image_outlined),
                       label: const Text('添加图片'),
-                    ),
-                    TextButton.icon(
-                      onPressed: () async {
-                        final bytes = await Pasteboard.image;
-                        if (bytes != null) {
-                          pending.add(
-                            PendingAttachment(
-                              'clipboard-${DateTime.now().millisecondsSinceEpoch}.png',
-                              'image/png',
-                              bytes,
-                            ),
-                          );
-                          set(() {});
-                        } else {
-                          message('剪贴板中没有图片');
-                        }
-                      },
-                      icon: const Icon(Icons.content_paste),
-                      label: const Text('粘贴截图'),
                     ),
                   ],
                 ),

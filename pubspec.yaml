@@ -47,6 +47,12 @@ dependencies:
   crypto: ^3.0.7
   desktop_drop: ^0.8.4
   flutter_markdown_plus: ^1.0.12
+  sqflite: ^2.4.4
+  path_provider: ^2.1.6
+  supabase_flutter: ^2.17.2
+  connectivity_plus: ^7.3.1
+  workmanager: ^0.10.10
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
