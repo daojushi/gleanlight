@@ -32,3 +32,9 @@ Windows 插件构建需要开启系统“开发人员模式”（本开发环境
 所有核心实体使用 UUID，保留 `created_at`、`updated_at`、`deleted_at`，删除采用 soft delete。数据库位于 Windows 应用支持目录中的 `its.sqlite`。
 
 图片复制到数据库旁的 `attachments/`，业务实体只保存 Attachment 关联；“导出备份”会生成包含 `database.sqlite`、`data.json` 与 `attachments/` 的 ZIP。
+
+## 修改存储位置
+
+在“设置 → 存储位置”中选择目录后，应用会在该目录创建 `ItsData/`，安全迁移数据库与附件，并立即从新位置重新加载。迁移过程包含数据库关闭、临时目录复制、SQLite 完整性检查、附件逐项校验、附件路径重写、设置原子更新和失败回退。
+
+存储位置配置固定保存在 `%APPDATA%\com.localfirst\its_app\settings.json`，因此数据库移动后及应用重启时仍能正确定位数据。

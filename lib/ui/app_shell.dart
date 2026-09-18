@@ -197,6 +197,7 @@ class _AppShellState extends State<AppShell> {
                       TasksPage(controller: c, onMessage: message),
                       SchedulesPage(controller: c, onMessage: message),
                       TopicsPage(controller: c, onMessage: message),
+                      SettingsPage(controller: c, onMessage: message),
                     ],
                   ),
           ),
@@ -212,6 +213,7 @@ const _nav = [
   ('Todo', Icons.check_rounded),
   ('日程', Icons.calendar_today_outlined),
   ('Topic', Icons.tag_rounded),
+  ('设置', Icons.settings_outlined),
 ];
 
 class PageFrame extends StatelessWidget {
@@ -746,6 +748,126 @@ class SchedulesPage extends StatelessWidget {
       ),
     );
   }
+}
+
+class SettingsPage extends StatefulWidget {
+  const SettingsPage({
+    super.key,
+    required this.controller,
+    required this.onMessage,
+  });
+  final AppController controller;
+  final void Function(Object) onMessage;
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  bool moving = false;
+  Future<void> chooseStorage() async {
+    final selected = await FilePicker.getDirectoryPath(dialogTitle: '选择新的存储位置');
+    if (selected == null || !mounted) return;
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('迁移本地数据？'),
+            content: Text(
+              '数据库和全部附件将迁移到：\n$selected\\ItsData\n\n迁移期间请不要关闭应用。完成后应用会立即从新位置重新加载。',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('开始迁移'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    setState(() => moving = true);
+    try {
+      await widget.controller.moveStorage(selected);
+      widget.onMessage('存储位置已迁移并重新加载');
+    } catch (e) {
+      widget.onMessage('迁移失败，已保留原数据：$e');
+    } finally {
+      if (mounted) setState(() => moving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PageFrame(
+    kicker: 'SETTINGS',
+    title: '设置',
+    subtitle: '管理本地数据与桌面集成',
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '存储位置',
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '数据库、图片附件和导出源文件均保存在此目录。设置本身固定保存在系统 AppData，应用重启后会自动加载所选位置。',
+                  style: TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 14),
+                SelectableText(
+                  widget.controller.storageLocation,
+                  style: const TextStyle(fontFamily: 'Consolas'),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: moving ? null : chooseStorage,
+                  icon: moving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.drive_file_move_outline),
+                  label: Text(moving ? '正在迁移…' : '修改存储位置'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '桌面功能',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  '全局快捷键：Ctrl + Shift + Space\n系统托盘：单击图标快速打开记录页',
+                  style: TextStyle(color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class TopicsPage extends StatefulWidget {

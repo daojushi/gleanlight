@@ -20,6 +20,39 @@ class SqliteAppRepository implements AppRepository {
   late String _openedPath;
 
   Future<void> close() => _db.close();
+  String get storageRoot => p.dirname(_openedPath);
+
+  Future<void> rewriteAttachmentPaths(String root) async {
+    final rows = await _db.query('attachments', columns: ['id', 'local_path']);
+    await _db.transaction((txn) async {
+      for (final row in rows) {
+        final oldPath = row['local_path']! as String;
+        await txn.update(
+          'attachments',
+          {'local_path': p.join(root, 'attachments', p.basename(oldPath))},
+          where: 'id=?',
+          whereArgs: [row['id']],
+        );
+      }
+    });
+  }
+
+  Future<void> validateStorage() async {
+    final integrity = await _db.rawQuery('PRAGMA integrity_check');
+    if (integrity.isEmpty || integrity.first.values.first != 'ok') {
+      throw StateError('数据库完整性校验失败');
+    }
+    final rows = await _db.query(
+      'attachments',
+      columns: ['local_path'],
+      where: 'deleted_at IS NULL',
+    );
+    for (final row in rows) {
+      if (!await File(row['local_path']! as String).exists()) {
+        throw StateError('附件迁移校验失败：${row['local_path']}');
+      }
+    }
+  }
 
   @override
   Future<void> initialize() async {

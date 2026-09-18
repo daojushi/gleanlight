@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 
 import 'app/app_controller.dart';
 import 'app/desktop_integration.dart';
-import 'data/sqlite_app_repository.dart';
+import 'data/storage_manager.dart';
 import 'ui/app_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final controller = AppController(SqliteAppRepository());
+  final storageManager = await StorageManager.load();
+  final controller = AppController(
+    storageManager.createRepository(),
+    storageManager,
+  );
   final captureRequests = ValueNotifier<int>(0);
   final desktop = DesktopIntegration(captureRequests);
   runApp(ItsApp(controller: controller, captureRequests: captureRequests));

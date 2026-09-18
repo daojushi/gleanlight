@@ -1,11 +1,14 @@
 import 'package:flutter/foundation.dart';
 
 import '../data/app_repository.dart';
+import '../data/sqlite_app_repository.dart';
+import '../data/storage_manager.dart';
 import '../domain/models.dart';
 
 class AppController extends ChangeNotifier {
-  AppController(this.repository);
-  final AppRepository repository;
+  AppController(this.repository, this.storageManager);
+  AppRepository repository;
+  final StorageManager storageManager;
   bool loading = true;
   Object? error;
   List<Idea> ideas = const [];
@@ -163,6 +166,24 @@ class AppController extends ChangeNotifier {
   }
 
   Future<String> exportBackup(String path) => repository.exportBackup(path);
+
+  String get storageLocation => storageManager.currentRoot;
+  Future<void> moveStorage(String selectedDirectory) async {
+    if (repository is! SqliteAppRepository) throw StateError('当前数据源不支持迁移');
+    loading = true;
+    notifyListeners();
+    try {
+      repository = await storageManager.move(
+        repository as SqliteAppRepository,
+        selectedDirectory,
+      );
+      await reload();
+    } catch (error) {
+      loading = false;
+      notifyListeners();
+      rethrow;
+    }
+  }
 }
 
 class PendingAttachment {

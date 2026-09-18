@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:its_app/data/sqlite_app_repository.dart';
+import 'package:its_app/data/storage_manager.dart';
 import 'package:its_app/domain/models.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -108,4 +109,57 @@ void main() {
       await directory.delete(recursive: true);
     }
   });
+
+  test(
+    'moves database and attachments then reloads from persisted location',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp('its-move-test-');
+      SqliteAppRepository? migrated;
+      try {
+        final originalRoot = Directory('${sandbox.path}\\original')
+          ..createSync();
+        final destination = Directory('${sandbox.path}\\destination')
+          ..createSync();
+        final preferences = File('${sandbox.path}\\config\\settings.json');
+        await preferences.parent.create(recursive: true);
+        final manager = StorageManager.forTesting(
+          preferences,
+          originalRoot.path,
+        );
+        final source = SqliteAppRepository(
+          factory: databaseFactoryFfi,
+          databasePath: '${originalRoot.path}\\its.sqlite',
+        );
+        await source.initialize();
+        final id = await source.saveIdea(
+          content: '需要迁移',
+          status: IdeaStatus.newIdea,
+          topicIds: const [],
+        );
+        await source.addIdeaAttachment(
+          id,
+          'image.png',
+          'image/png',
+          Uint8List.fromList([1, 2, 3]),
+        );
+
+        migrated = await manager.move(source, destination.path);
+        final ideas = await migrated.listIdeas();
+        expect(ideas.single.content, '需要迁移');
+        expect(
+          ideas.single.attachments.single.localPath,
+          startsWith('${destination.path}\\ItsData'),
+        );
+        expect(
+          File(ideas.single.attachments.single.localPath).existsSync(),
+          isTrue,
+        );
+        expect(File('${originalRoot.path}\\its.sqlite').existsSync(), isFalse);
+        expect(await preferences.readAsString(), contains('ItsData'));
+      } finally {
+        await migrated?.close();
+        await sandbox.delete(recursive: true);
+      }
+    },
+  );
 }
