@@ -1,5 +1,13 @@
 spec/
-node_modules/
-dist/
 *.sqlite
 *.sqlite.tmp
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+*.iml
+.idea/
