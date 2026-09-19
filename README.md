@@ -1,17 +1,30 @@
-# 拾光 — Idea / Task / Schedule
+# 拾光
 
-基于 Flutter + SQLite 的 Windows-first、Local-first 个人记录与规划应用，实现 `spec/idea-task-schedule-app-spec-v0.1.md` 的 P0、P1 与 P2 客户端能力。
+拾光是一个 Windows-first、Local-first 的个人记录与规划应用，用独立的 Idea、Task 和 Schedule 承接“先记下来，再决定如何行动”的工作流。
 
-P1 包括图片附件、剪贴板截图与拖放、Markdown 预览、全局 `Ctrl + Shift + Space` Quick Capture、系统托盘、全文搜索、多条件筛选、日程日期视图，以及包含 SQLite、JSON 和附件的 ZIP 备份。
+很多笔记工具会迫使用户在记录时立即分类或创建任务。拾光把快速捕捉放在首位：Idea 保留思考，Task 表示可执行事项，Schedule 表示已确定的时间安排，Topic 则在不同类型之间聚合同一主题。
 
-## 开发
+## 核心体验
+
+- **快速记录**：默认首页直接输入 Idea，Windows 可用 `Ctrl + Shift + Space` 全局唤起。
+- **灵感流转**：灵感可在“新想法 / 思考中 / 实践中 / 已实现 / 搁置”之间直接切换。已实现内容会移入“历史灵感”，按最后更新时间倒序展示。
+- **图片与长内容**：支持 Markdown 预览、图片选择与拖放；在灵感输入框中按 `Ctrl + V` 可直接粘贴文字或截图。图片可放大、缩放、拖动，并可通过按钮或 `Ctrl + C` 复制原图。
+- **聚合与检索**：支持全文搜索、状态筛选、Topic 筛选，以及跨 Idea、Task、Schedule 的 Topic 聚合视图。
+- **本地数据优先**：离线时所有核心功能仍然可用；数据库和附件存储位置可迁移，也可导出完整 ZIP 备份。
+- **可选同步**：不配置云服务时保持纯本地模式；需要时可通过自己的 Supabase 项目在 Windows 和 Android 之间同步。
+
+## 快速开始
+
+需要 Flutter SDK，并安装 Windows 桌面开发环境。Windows 插件构建还需开启系统“开发人员模式”。
 
 ```powershell
 flutter pub get
 flutter run -d windows
 ```
 
-验证：
+上述命令在仓库根目录中执行。如果已经获得构建好的 Windows 版本，请保留 Release 目录中的 `data/`、DLL 和可执行文件，不要只单独复制 `its_app.exe`。
+
+## 构建与验证
 
 ```powershell
 flutter analyze
@@ -19,44 +32,51 @@ flutter test
 flutter build windows --release
 ```
 
-Windows 插件构建需要开启系统“开发人员模式”（本开发环境已开启）。Release 产物位于 `build/windows/x64/runner/Release/`，运行或分发时请保留整个目录。
+Windows Release 产物位于：
 
-## 架构
+```text
+build/windows/x64/runner/Release/
+```
 
-- `lib/domain`：Idea、Task、Schedule、Topic 领域模型
-- `lib/data/app_repository.dart`：数据访问抽象边界
-- `lib/data/sqlite_app_repository.dart`：本地 SQLite 实现
-- `lib/app`：应用状态与用例编排
-- `lib/ui`：Windows 桌面界面，不直接访问 SQL
+要准备日常使用的稳定版，请将整个 `Release/` 目录复制到开发目录之外。更新时先退出应用（包括系统托盘），再用新的完整目录覆盖旧版。
 
-所有核心实体使用 UUID，保留 `created_at`、`updated_at`、`deleted_at`，删除采用 soft delete。数据库位于 Windows 应用支持目录中的 `its.sqlite`。
+Android 调试包可通过以下命令构建：
 
-图片复制到数据库旁的 `attachments/`，业务实体只保存 Attachment 关联；“导出备份”会生成包含 `database.sqlite`、`data.json` 与 `attachments/` 的 ZIP。
+```powershell
+flutter build apk --debug
+```
 
-## 修改存储位置
+## 数据存储与备份
 
-在“设置 → 存储位置”中选择目录后，应用会在该目录创建 `ItsData/`，安全迁移数据库与附件，并立即从新位置重新加载。迁移过程包含数据库关闭、临时目录复制、SQLite 完整性检查、附件逐项校验、附件路径重写、设置原子更新和失败回退。
+默认情况下，Windows 数据位于：
 
-存储位置配置固定保存在 `%APPDATA%\com.localfirst\its_app\settings.json`，因此数据库移动后及应用重启时仍能正确定位数据。
+```text
+%APPDATA%\com.localfirst\its_app\
+```
 
-## Android 与跨设备同步
+- `its.sqlite`：Idea、Task、Schedule、Topic 及关联数据。
+- `attachments/`：灵感的图片附件。
+- `settings.json`：当前数据存储位置等持久化设置。
 
-- Android 使用同一套 Domain/Application 层与原生 `sqflite` 本地数据库。
-- 手机端采用底部导航和快速记录 FAB；离线、未登录时核心功能仍完整可用。
-- Android 已注册文本分享入口；从浏览器、阅读器等应用“分享”文本到拾光后，会直接打开快速记录并预填内容。
-- 同步位于可替换的 `SyncProvider` 边界后，当前提供 Supabase 实现。
-- 同步按 `updated_at` 合并记录、保留 soft-delete tombstone、同步附件对象；等时异值冲突会写入本地冲突表，可在“设置 → 查看同步冲突”中选择保留本机或采用其他设备版本。
-- Android 使用 WorkManager 每 30 分钟安排一次仅联网时执行的后台同步。
+在“设置 → 存储位置”中选择新目录后，应用会创建 `ItsData/` 并迁移数据库和附件。迁移过程会先复制到临时目录，完成 SQLite 完整性和附件校验后再切换；失败时保留原数据。
 
-启用云同步：
+“导出备份”会生成包含 SQLite 数据库、JSON 数据和附件的 ZIP 文件。
+
+## 可选的跨设备同步
 
 1. 创建 Supabase 项目。
 2. 在 SQL Editor 执行 [`supabase/schema.sql`](supabase/schema.sql)。
-3. 在应用“设置”中填写 Project URL 与 publishable/anon key，保存后重启。
+3. 在应用“设置”中填写 Project URL 和 publishable/anon key，保存后重启。
 4. Windows 和 Android 使用同一账号注册或登录。
 
-未填写配置时应用使用 `NoSyncProvider`，保持纯离线模式。Android 调试包可通过 `flutter build apk --debug` 构建。
+同步实现位于可替换的 `SyncProvider` 边界之后，按 `updated_at` 合并记录、保留 soft-delete tombstone 并同步附件。等时异值冲突会保存到本地，可在“设置 → 查看同步冲突”中处理。未填写同步配置时，应用使用 `NoSyncProvider`，核心功能完全离线可用。
 
-当前同步实现是 `SyncProvider` 后的自定义 Supabase 记录级同步，而不是把业务层绑定到 PowerSync。若后续采用 PowerSync，只需增加新的 Provider，并为其配置 PowerSync 服务端 endpoint；不应让两个客户端直接共享同一个 SQLite 文件。
+## 架构导航
 
-本机已配置 `Its_API_36` AVD。运行模拟器还要求 Windows Hypervisor Platform/Android Emulator Hypervisor Driver 可用；可先执行 `emulator -accel-check`，确认加速可用后再执行 `flutter run -d emulator-5554`。
+- [`lib/domain`](lib/domain)：Idea、Task、Schedule、Topic 等领域模型。
+- [`lib/app`](lib/app)：应用状态、用例编排及桌面/Android 集成。
+- [`lib/data`](lib/data)：数据访问边界、SQLite 实现和存储迁移。
+- [`lib/sync`](lib/sync)：同步抽象、Supabase 实现、冲突和后台同步。
+- [`lib/ui`](lib/ui)：Windows/Android 自适应界面，通过应用控制器访问业务能力，不直接操作 SQL。
+
+核心实体使用 UUID，保留 `created_at`、`updated_at`、`deleted_at`，删除采用 soft delete。更完整的产品语义、领域边界和验收场景见 [`spec/idea-task-schedule-app-spec-v0.1.md`](spec/idea-task-schedule-app-spec-v0.1.md)。
