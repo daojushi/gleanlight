@@ -67,7 +67,11 @@ class SqliteAppRepository implements AppRepository {
     _db = await selectedFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
+        // Foreground and Android WorkManager isolates may open the same file.
+        // Each repository must own its handle so one isolate cannot close the
+        // other isolate's active connection.
+        singleInstance: false,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, _) async {
           await db.execute(
@@ -100,18 +104,73 @@ class SqliteAppRepository implements AppRepository {
         onUpgrade: (db, oldVersion, _) async {
           if (oldVersion < 2) await _createAttachments(db);
           if (oldVersion < 3) await _createSyncTables(db);
+          if (oldVersion < 4) await _upgradeSyncConflicts(db);
         },
       ),
     );
+    await _removeEquivalentSyncConflicts();
   }
 
   Future<void> _createAttachments(DatabaseExecutor db) => db.execute(
     'CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, mime_type TEXT NOT NULL, file_name TEXT NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL, local_path TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)',
   );
 
-  Future<void> _createSyncTables(DatabaseExecutor db) => db.execute(
-    'CREATE TABLE IF NOT EXISTS sync_conflicts (id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, local_json TEXT NOT NULL, remote_json TEXT NOT NULL, source_device TEXT NOT NULL, created_at TEXT NOT NULL)',
-  );
+  Future<void> _createSyncTables(DatabaseExecutor db) async {
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS sync_conflicts (id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, local_json TEXT NOT NULL, remote_json TEXT NOT NULL, source_device TEXT NOT NULL, created_at TEXT NOT NULL)',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_conflict_entity_source ON sync_conflicts(entity_type, entity_id, source_device)',
+    );
+  }
+
+  Future<void> _upgradeSyncConflicts(DatabaseExecutor db) async {
+    await db.execute(
+      'DELETE FROM sync_conflicts WHERE rowid NOT IN (SELECT MAX(rowid) FROM sync_conflicts GROUP BY entity_type, entity_id, source_device)',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_conflict_entity_source ON sync_conflicts(entity_type, entity_id, source_device)',
+    );
+  }
+
+  Future<void> _removeEquivalentSyncConflicts() async {
+    final rows = await _db.query('sync_conflicts');
+    final equivalentIds = <String>[];
+    for (final row in rows) {
+      final local = jsonDecode(row['local_json']! as String);
+      final remote = jsonDecode(row['remote_json']! as String);
+      if (_deepEquivalent(local, remote)) {
+        equivalentIds.add(row['id']! as String);
+      }
+    }
+    if (equivalentIds.isEmpty) return;
+    await _db.transaction((txn) async {
+      for (final id in equivalentIds) {
+        await txn.delete('sync_conflicts', where: 'id=?', whereArgs: [id]);
+      }
+    });
+  }
+
+  bool _deepEquivalent(Object? left, Object? right) {
+    if (left is Map && right is Map) {
+      if (left.length != right.length) return false;
+      for (final key in left.keys) {
+        if (!right.containsKey(key) ||
+            !_deepEquivalent(left[key], right[key])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (left is List && right is List) {
+      if (left.length != right.length) return false;
+      for (var index = 0; index < left.length; index++) {
+        if (!_deepEquivalent(left[index], right[index])) return false;
+      }
+      return true;
+    }
+    return left == right;
+  }
 
   Future<String> _defaultDatabasePath() async {
     final root =
@@ -531,7 +590,7 @@ class SqliteAppRepository implements AppRepository {
               : DateTime.parse(local.first['updated_at']! as String);
           if (localTime != null &&
               remoteTime.isAtSameMomentAs(localTime) &&
-              jsonEncode(local.first) != jsonEncode(remote)) {
+              !_deepEquivalent(local.first, remote)) {
             await txn.insert('sync_conflicts', {
               'id': _uuid.v4(),
               'entity_type': table,
@@ -540,7 +599,7 @@ class SqliteAppRepository implements AppRepository {
               'remote_json': jsonEncode(remote),
               'source_device': sourceDevice,
               'created_at': DateTime.now().toUtc().toIso8601String(),
-            });
+            }, conflictAlgorithm: ConflictAlgorithm.replace);
           }
           if (localTime == null || remoteTime.isAfter(localTime)) {
             await txn.insert(
@@ -662,6 +721,47 @@ class SqliteAppRepository implements AppRepository {
         where: 'id=?',
         whereArgs: [conflictId],
       );
+    });
+  }
+
+  Future<void> ignoreAllSyncConflicts() => _db.delete('sync_conflicts');
+
+  Future<void> resolveAllSyncConflicts({required bool useRemote}) async {
+    const allowed = {'ideas', 'tasks', 'schedules', 'topics'};
+    await _db.transaction((txn) async {
+      final conflicts = await txn.query(
+        'sync_conflicts',
+        orderBy: 'created_at DESC',
+      );
+      final resolvedEntities = <String>{};
+      for (final conflict in conflicts) {
+        final table = conflict['entity_type']! as String;
+        if (!allowed.contains(table)) continue;
+        final entityId = conflict['entity_id']! as String;
+        final entityKey = '$table:$entityId';
+        if (!resolvedEntities.add(entityKey)) continue;
+
+        Map<String, Object?> chosen;
+        if (useRemote) {
+          chosen = (jsonDecode(conflict['remote_json']! as String) as Map)
+              .cast<String, Object?>();
+        } else {
+          final current = await txn.query(
+            table,
+            where: 'id=?',
+            whereArgs: [entityId],
+          );
+          if (current.isEmpty) continue;
+          chosen = Map<String, Object?>.from(current.single);
+        }
+        chosen['updated_at'] = DateTime.now().toUtc().toIso8601String();
+        await txn.insert(
+          table,
+          chosen,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await txn.delete('sync_conflicts');
     });
   }
 

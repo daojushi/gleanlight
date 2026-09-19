@@ -120,6 +120,35 @@ void main() {
     }
   });
 
+  test('repositories own independent handles for the same database', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'its-connection-test-',
+    );
+    final path = '${directory.path}\\shared.sqlite';
+    final foreground = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: path,
+    );
+    final background = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: path,
+    );
+    try {
+      await foreground.initialize();
+      await background.initialize();
+      await background.close();
+      await foreground.saveIdea(
+        content: '前台连接仍然可用',
+        status: IdeaStatus.newIdea,
+        topicIds: const [],
+      );
+      expect((await foreground.listIdeas()).single.content, '前台连接仍然可用');
+    } finally {
+      await foreground.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('equal-time sync conflict can be resolved explicitly', () async {
     final directory = await Directory.systemTemp.createTemp(
       'its-conflict-test-',
@@ -150,6 +179,90 @@ void main() {
       await repo.resolveSyncConflict(conflicts.single.id, useRemote: true);
       expect((await repo.listIdeas()).single.content, '远程版本');
       expect(await repo.listSyncConflicts(), isEmpty);
+    } finally {
+      await repo.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
+  test(
+    'sync comparison ignores JSON object key order and deduplicates',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'its-sync-order-test-',
+      );
+      final repo = SqliteAppRepository(
+        factory: databaseFactoryFfi,
+        databasePath: '${directory.path}\\order.sqlite',
+      );
+      try {
+        await repo.initialize();
+        await repo.saveIdea(
+          content: '相同内容',
+          status: IdeaStatus.thinking,
+          topicIds: const [],
+        );
+        final snapshot = await repo.exportSyncSnapshot();
+        final original = Map<String, Object?>.from(
+          (snapshot['ideas'] as List).single as Map,
+        );
+        final reordered = Map<String, Object?>.fromEntries(
+          original.entries.toList().reversed,
+        );
+        await repo.mergeSyncSnapshot({
+          ...snapshot,
+          'ideas': [reordered],
+        }, sourceDevice: 'phone');
+        expect(await repo.listSyncConflicts(), isEmpty);
+
+        reordered['content'] = '真正不同的内容';
+        final changed = {
+          ...snapshot,
+          'ideas': [reordered],
+        };
+        await repo.mergeSyncSnapshot(changed, sourceDevice: 'phone');
+        await repo.mergeSyncSnapshot(changed, sourceDevice: 'phone');
+        expect(await repo.listSyncConflicts(), hasLength(1));
+      } finally {
+        await repo.close();
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
+  test('all sync conflicts can be ignored or resolved in one action', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'its-sync-bulk-test-',
+    );
+    final repo = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: '${directory.path}\\bulk.sqlite',
+    );
+    try {
+      await repo.initialize();
+      await repo.saveIdea(
+        content: '本机批量版本',
+        status: IdeaStatus.newIdea,
+        topicIds: const [],
+      );
+      final snapshot = await repo.exportSyncSnapshot();
+      final remoteIdea = Map<String, Object?>.from(
+        (snapshot['ideas'] as List).single as Map,
+      )..['content'] = '远程批量版本';
+      final changed = {
+        ...snapshot,
+        'ideas': [remoteIdea],
+      };
+
+      await repo.mergeSyncSnapshot(changed, sourceDevice: 'phone');
+      await repo.ignoreAllSyncConflicts();
+      expect(await repo.listSyncConflicts(), isEmpty);
+      expect((await repo.listIdeas()).single.content, '本机批量版本');
+
+      await repo.mergeSyncSnapshot(changed, sourceDevice: 'phone');
+      await repo.resolveAllSyncConflicts(useRemote: true);
+      expect(await repo.listSyncConflicts(), isEmpty);
+      expect((await repo.listIdeas()).single.content, '远程批量版本');
     } finally {
       await repo.close();
       await directory.delete(recursive: true);

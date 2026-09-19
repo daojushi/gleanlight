@@ -1385,58 +1385,115 @@ class _SettingsPageState extends State<SettingsPage> {
         title: Text('同步冲突（${conflicts.length}）'),
         content: SizedBox(
           width: 620,
-          child: ListView.separated(
-            shrinkWrap: true,
-            itemCount: conflicts.length,
-            separatorBuilder: (_, _) => const Divider(),
-            itemBuilder: (_, index) {
-              final conflict = conflicts[index];
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${conflict.entityType} · ${DateFormat('yyyy-MM-dd HH:mm').format(conflict.createdAt.toLocal())}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('本机：${conflict.localSummary}'),
-                  const SizedBox(height: 4),
-                  Text('其他设备：${conflict.remoteSummary}'),
-                  const SizedBox(height: 8),
-                  Wrap(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 560),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(
                     spacing: 8,
+                    runSpacing: 8,
                     children: [
-                      OutlinedButton(
+                      TextButton.icon(
                         onPressed: () async {
-                          await widget.controller.resolveSyncConflict(
-                            conflict.id,
+                          await widget.controller.ignoreAllSyncConflicts();
+                          if (dialogContext.mounted) {
+                            Navigator.pop(dialogContext);
+                          }
+                          widget.onMessage('已忽略全部同步冲突');
+                        },
+                        icon: const Icon(Icons.clear_all),
+                        label: const Text('忽略全部'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          await widget.controller.resolveAllSyncConflicts(
                             useRemote: false,
                           );
                           if (dialogContext.mounted) {
                             Navigator.pop(dialogContext);
                           }
-                          widget.onMessage('已保留本机版本，将在下次同步上传');
+                          widget.onMessage('已全部保留本机版本');
                         },
-                        child: const Text('保留本机'),
+                        icon: const Icon(Icons.computer),
+                        label: const Text('全部保留本机'),
                       ),
-                      FilledButton.tonal(
+                      FilledButton.tonalIcon(
                         onPressed: () async {
-                          await widget.controller.resolveSyncConflict(
-                            conflict.id,
+                          await widget.controller.resolveAllSyncConflicts(
                             useRemote: true,
                           );
                           if (dialogContext.mounted) {
                             Navigator.pop(dialogContext);
                           }
-                          widget.onMessage('已采用其他设备版本');
+                          widget.onMessage('已全部采用其他设备版本');
                         },
-                        child: const Text('采用其他设备'),
+                        icon: const Icon(Icons.devices_other),
+                        label: const Text('全部采用其他设备'),
                       ),
                     ],
                   ),
-                ],
-              );
-            },
+                ),
+                const Divider(),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: conflicts.length,
+                    separatorBuilder: (_, _) => const Divider(),
+                    itemBuilder: (_, index) {
+                      final conflict = conflicts[index];
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${conflict.entityType} · ${DateFormat('yyyy-MM-dd HH:mm').format(conflict.createdAt.toLocal())}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 8),
+                          Text('本机：${conflict.localSummary}'),
+                          const SizedBox(height: 4),
+                          Text('其他设备：${conflict.remoteSummary}'),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              OutlinedButton(
+                                onPressed: () async {
+                                  await widget.controller.resolveSyncConflict(
+                                    conflict.id,
+                                    useRemote: false,
+                                  );
+                                  if (dialogContext.mounted) {
+                                    Navigator.pop(dialogContext);
+                                  }
+                                  widget.onMessage('已保留本机版本，将在下次同步上传');
+                                },
+                                child: const Text('保留本机'),
+                              ),
+                              FilledButton.tonal(
+                                onPressed: () async {
+                                  await widget.controller.resolveSyncConflict(
+                                    conflict.id,
+                                    useRemote: true,
+                                  );
+                                  if (dialogContext.mounted) {
+                                    Navigator.pop(dialogContext);
+                                  }
+                                  widget.onMessage('已采用其他设备版本');
+                                },
+                                child: const Text('采用其他设备'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         actions: [

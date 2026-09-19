@@ -87,6 +87,20 @@ class AppController extends ChangeNotifier {
     await reload();
   }
 
+  Future<void> ignoreAllSyncConflicts() async {
+    final repo = repository;
+    if (repo is! SqliteAppRepository) return;
+    await repo.ignoreAllSyncConflicts();
+    await reload();
+  }
+
+  Future<void> resolveAllSyncConflicts({required bool useRemote}) async {
+    final repo = repository;
+    if (repo is! SqliteAppRepository) return;
+    await repo.resolveAllSyncConflicts(useRemote: useRemote);
+    await reload();
+  }
+
   @override
   void dispose() {
     _syncSubscription?.cancel();

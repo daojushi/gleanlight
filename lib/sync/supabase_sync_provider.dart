@@ -17,6 +17,7 @@ class SupabaseSyncProvider implements SyncProvider {
   final _states = StreamController<SyncState>.broadcast();
   StreamSubscription<List<ConnectivityResult>>? _network;
   SyncState _state = const SyncState(SyncPhase.idle);
+  Future<void>? _activeSync;
 
   @override
   SyncState get state => _state;
@@ -38,7 +39,17 @@ class SupabaseSyncProvider implements SyncProvider {
   }
 
   @override
-  Future<void> sync() async {
+  Future<void> sync() {
+    final active = _activeSync;
+    if (active != null) return active;
+    final operation = _performSync();
+    _activeSync = operation;
+    return operation.whenComplete(() {
+      if (identical(_activeSync, operation)) _activeSync = null;
+    });
+  }
+
+  Future<void> _performSync() async {
     final user = client.auth.currentUser;
     if (user == null) {
       _set(const SyncState(SyncPhase.idle, message: '请先登录'));
