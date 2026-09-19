@@ -282,14 +282,17 @@ class PageFrame extends StatelessWidget {
     required this.subtitle,
     required this.child,
     this.action,
+    this.onRefresh,
   });
   final String kicker, title, subtitle;
   final Widget child;
   final Widget? action;
+  final Future<void> Function()? onRefresh;
   @override
   Widget build(BuildContext context) {
     final mobile = MediaQuery.sizeOf(context).width < 760;
-    return SingleChildScrollView(
+    final scrollView = SingleChildScrollView(
+      physics: onRefresh == null ? null : const AlwaysScrollableScrollPhysics(),
       padding: mobile
           ? const EdgeInsets.fromLTRB(16, 14, 16, 90)
           : const EdgeInsets.fromLTRB(64, 44, 64, 60),
@@ -342,6 +345,9 @@ class PageFrame extends StatelessWidget {
         ),
       ),
     );
+    return onRefresh == null
+        ? scrollView
+        : RefreshIndicator(onRefresh: onRefresh!, child: scrollView);
   }
 }
 
@@ -491,7 +497,7 @@ class _CapturePageState extends State<CapturePage> {
                           },
                           child: TextField(
                             controller: text,
-                            autofocus: true,
+                            autofocus: !Platform.isAndroid,
                             minLines: 8,
                             maxLines: null,
                             decoration: const InputDecoration(
@@ -662,16 +668,43 @@ class IdeasPage extends StatelessWidget {
   });
   final AppController controller;
   final void Function(Object) onMessage;
+
+  Future<void> _sync() async {
+    try {
+      await controller.syncNow();
+      onMessage(controller.syncState.message ?? '同步完成');
+    } catch (error) {
+      onMessage('同步失败：$error');
+    }
+  }
+
   @override
   Widget build(BuildContext context) => PageFrame(
     kicker: 'IDEAS',
     title: '灵感',
     subtitle:
         '${controller.ideas.where((idea) => idea.status != IdeaStatus.implemented).length} 条未实现想法',
-    action: FilledButton.icon(
-      onPressed: () => showIdeaDialog(context, controller, null, onMessage),
-      icon: const Icon(Icons.add),
-      label: const Text('新建 Idea'),
+    onRefresh: Platform.isAndroid ? _sync : null,
+    action: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        if (Platform.isWindows)
+          OutlinedButton.icon(
+            onPressed: controller.syncState.phase == SyncPhase.syncing
+                ? null
+                : _sync,
+            icon: const Icon(Icons.refresh),
+            label: Text(
+              controller.syncState.phase == SyncPhase.syncing ? '同步中…' : '刷新',
+            ),
+          ),
+        FilledButton.icon(
+          onPressed: () => showIdeaDialog(context, controller, null, onMessage),
+          icon: const Icon(Icons.add),
+          label: const Text('新建 Idea'),
+        ),
+      ],
     ),
     child: SearchFilter(
       topics: controller.topics,
