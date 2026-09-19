@@ -109,6 +109,7 @@ class _AppShellState extends State<AppShell> {
                 captureRequests: widget.captureRequests,
               ),
               IdeasPage(controller: c, onMessage: message),
+              HistoryIdeasPage(controller: c, onMessage: message),
               TasksPage(controller: c, onMessage: message),
               SchedulesPage(controller: c, onMessage: message),
               TopicsPage(controller: c, onMessage: message),
@@ -125,18 +126,27 @@ class _AppShellState extends State<AppShell> {
           title: Text(_nav[index].$1),
           actions: [
             IconButton(
+              tooltip: '历史灵感',
+              onPressed: () => setState(() => index = 2),
+              icon: const Icon(Icons.history_rounded),
+            ),
+            IconButton(
               tooltip: '设置',
-              onPressed: () => setState(() => index = 5),
+              onPressed: () => setState(() => index = 6),
               icon: const Icon(Icons.settings_outlined),
             ),
           ],
         ),
         body: SafeArea(child: content),
         bottomNavigationBar: NavigationBar(
-          selectedIndex: index > 4 ? 0 : index,
-          onDestinationSelected: (value) => setState(() => index = value),
-          destinations: _nav
-              .take(5)
+          selectedIndex: index >= 3 && index <= 5
+              ? index - 1
+              : index <= 1
+              ? index
+              : 0,
+          onDestinationSelected: (value) =>
+              setState(() => index = value < 2 ? value : value + 1),
+          destinations: [_nav[0], _nav[1], ..._nav.skip(3).take(3)]
               .map(
                 (item) =>
                     NavigationDestination(icon: Icon(item.$2), label: item.$1),
@@ -257,6 +267,7 @@ class _AppShellState extends State<AppShell> {
 const _nav = [
   ('记录', Icons.add_rounded),
   ('灵感', Icons.auto_awesome_outlined),
+  ('历史灵感', Icons.history_rounded),
   ('Todo', Icons.check_rounded),
   ('日程', Icons.calendar_today_outlined),
   ('Topic', Icons.tag_rounded),
@@ -655,7 +666,8 @@ class IdeasPage extends StatelessWidget {
   Widget build(BuildContext context) => PageFrame(
     kicker: 'IDEAS',
     title: '灵感',
-    subtitle: '${controller.ideas.length} 条想法',
+    subtitle:
+        '${controller.ideas.where((idea) => idea.status != IdeaStatus.implemented).length} 条未实现想法',
     action: FilledButton.icon(
       onPressed: () => showIdeaDialog(context, controller, null, onMessage),
       icon: const Icon(Icons.add),
@@ -663,11 +675,15 @@ class IdeasPage extends StatelessWidget {
     ),
     child: SearchFilter(
       topics: controller.topics,
-      statuses: IdeaStatus.values.map((e) => e.label).toList(),
+      statuses: IdeaStatus.values
+          .where((status) => status != IdeaStatus.implemented)
+          .map((status) => status.label)
+          .toList(),
       builder: (query, topic, status) {
         final items = controller.ideas
             .where(
               (i) =>
+                  i.status != IdeaStatus.implemented &&
                   (query.isEmpty || i.content.toLowerCase().contains(query)) &&
                   (topic == null || i.topics.any((t) => t.id == topic)) &&
                   (status == null || i.status.label == status),
@@ -726,6 +742,98 @@ class IdeasPage extends StatelessWidget {
       },
     ),
   );
+}
+
+class HistoryIdeasPage extends StatelessWidget {
+  const HistoryIdeasPage({
+    super.key,
+    required this.controller,
+    required this.onMessage,
+  });
+  final AppController controller;
+  final void Function(Object) onMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final history =
+        controller.ideas
+            .where((idea) => idea.status == IdeaStatus.implemented)
+            .toList()
+          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return PageFrame(
+      kicker: 'HISTORY',
+      title: '历史灵感',
+      subtitle: '${history.length} 条已实现想法 · 最近更新的在最上方',
+      child: SearchFilter(
+        topics: controller.topics,
+        statuses: const [],
+        builder: (query, topic, _) {
+          final items = history
+              .where(
+                (idea) =>
+                    (query.isEmpty ||
+                        idea.content.toLowerCase().contains(query)) &&
+                    (topic == null ||
+                        idea.topics.any((item) => item.id == topic)),
+              )
+              .toList();
+          return items.isEmpty
+              ? const EmptyCard(
+                  title: '还没有历史灵感',
+                  subtitle: '将灵感状态改为“已实现”后，会自动出现在这里。',
+                )
+              : Column(
+                  children: items
+                      .map(
+                        (idea) => EntityCard(
+                          title: idea.content,
+                          markdown: true,
+                          onCopy: () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: idea.content),
+                            );
+                            onMessage('灵感已复制');
+                          },
+                          attachments: idea.attachments,
+                          status: idea.status.label,
+                          statusChoices: IdeaStatus.values
+                              .map((status) => status.label)
+                              .toList(),
+                          onStatusChanged: (label) async {
+                            final next = IdeaStatus.values.firstWhere(
+                              (status) => status.label == label,
+                            );
+                            try {
+                              await controller.updateIdeaStatus(idea, next);
+                              onMessage('状态已更新为 ${next.label}');
+                            } catch (e) {
+                              onMessage(e);
+                            }
+                          },
+                          topics: idea.topics,
+                          trailing:
+                              '更新于 ${DateFormat('MM/dd HH:mm').format(idea.updatedAt.toLocal())}',
+                          onEdit: () => showIdeaDialog(
+                            context,
+                            controller,
+                            idea,
+                            onMessage,
+                          ),
+                          onDelete: () => confirmDelete(
+                            context,
+                            controller,
+                            'idea',
+                            idea.id,
+                            onMessage,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                );
+        },
+      ),
+    );
+  }
 }
 
 class TasksPage extends StatelessWidget {
@@ -1496,51 +1604,73 @@ class SearchFilter extends StatefulWidget {
 class _SearchFilterState extends State<SearchFilter> {
   String query = '';
   String? topic, status;
+
+  Widget get _statusFilter => DropdownButton<String?>(
+    value: status,
+    hint: const Text('状态/日期'),
+    items: [
+      const DropdownMenuItem(value: null, child: Text('全部状态')),
+      ...widget.statuses.map((s) => DropdownMenuItem(value: s, child: Text(s))),
+    ],
+    onChanged: (v) => setState(() => status = v),
+  );
+
+  Widget get _topicFilter => DropdownButton<String?>(
+    value: topic,
+    hint: const Text('Topic'),
+    items: [
+      const DropdownMenuItem(value: null, child: Text('全部 Topic')),
+      ...widget.topics.map(
+        (t) => DropdownMenuItem(value: t.id, child: Text(t.name)),
+      ),
+    ],
+    onChanged: (v) => setState(() => topic = v),
+  );
+
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Row(
-        children: [
-          Expanded(
-            child: TextField(
-              onChanged: (v) => setState(() => query = v.trim().toLowerCase()),
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                hintText: '搜索…',
-                isDense: true,
-              ),
+  Widget build(BuildContext context) {
+    final search = TextField(
+      onChanged: (v) => setState(() => query = v.trim().toLowerCase()),
+      decoration: const InputDecoration(
+        prefixIcon: Icon(Icons.search),
+        hintText: '搜索…',
+        isDense: true,
+      ),
+    );
+    final mobile = MediaQuery.sizeOf(context).width < 760;
+    return Column(
+      children: [
+        if (mobile) ...[
+          search,
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 16,
+              runSpacing: 4,
+              children: [
+                if (widget.statuses.isNotEmpty) _statusFilter,
+                _topicFilter,
+              ],
             ),
           ),
-          const SizedBox(width: 10),
-          DropdownButton<String?>(
-            value: status,
-            hint: const Text('状态/日期'),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('全部状态')),
-              ...widget.statuses.map(
-                (s) => DropdownMenuItem(value: s, child: Text(s)),
-              ),
+        ] else
+          Row(
+            children: [
+              Expanded(child: search),
+              if (widget.statuses.isNotEmpty) ...[
+                const SizedBox(width: 10),
+                _statusFilter,
+              ],
+              const SizedBox(width: 10),
+              _topicFilter,
             ],
-            onChanged: (v) => setState(() => status = v),
           ),
-          const SizedBox(width: 10),
-          DropdownButton<String?>(
-            value: topic,
-            hint: const Text('Topic'),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('全部 Topic')),
-              ...widget.topics.map(
-                (t) => DropdownMenuItem(value: t.id, child: Text(t.name)),
-              ),
-            ],
-            onChanged: (v) => setState(() => topic = v),
-          ),
-        ],
-      ),
-      const SizedBox(height: 16),
-      widget.builder(query, topic, status),
-    ],
-  );
+        const SizedBox(height: 16),
+        widget.builder(query, topic, status),
+      ],
+    );
+  }
 }
 
 class EntityCard extends StatelessWidget {
@@ -1769,67 +1899,86 @@ Future<void> _showAttachmentPreview(
 ) => showDialog<void>(
   context: context,
   barrierColor: Colors.black87,
-  builder: (dialogContext) => Dialog(
-    backgroundColor: Colors.black,
-    insetPadding: const EdgeInsets.all(24),
-    child: SizedBox(
-      width: MediaQuery.sizeOf(dialogContext).width - 48,
-      height: MediaQuery.sizeOf(dialogContext).height - 48,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: InteractiveViewer(
-              minScale: 0.5,
-              maxScale: 8,
-              child: Center(
-                child: Image.file(
-                  File(attachment.localPath),
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stack) => const Center(
-                    child: Icon(
-                      Icons.broken_image_outlined,
-                      color: Colors.white70,
-                      size: 64,
+  builder: (dialogContext) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.keyC, control: true): () {
+        _copyAttachmentImage(context, attachment);
+      },
+    },
+    child: Focus(
+      autofocus: true,
+      child: Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: const EdgeInsets.all(24),
+        child: SizedBox(
+          width: MediaQuery.sizeOf(dialogContext).width - 48,
+          height: MediaQuery.sizeOf(dialogContext).height - 48,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: InteractiveViewer(
+                  minScale: 0.5,
+                  maxScale: 8,
+                  child: Center(
+                    child: Image.file(
+                      File(attachment.localPath),
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stack) => const Center(
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: Colors.white70,
+                          size: 64,
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: IconButton.filled(
-              onPressed: () => Navigator.pop(dialogContext),
-              tooltip: '关闭',
-              icon: const Icon(Icons.close),
-            ),
-          ),
-          Positioned(
-            left: 16,
-            bottom: 12,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                child: Text(
-                  '${attachment.fileName} · 滚轮缩放，拖动查看',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Row(
+                  children: [
+                    IconButton.filled(
+                      onPressed: () =>
+                          _copyAttachmentImage(context, attachment),
+                      tooltip: '复制图片 (Ctrl+C)',
+                      icon: const _CopyIcon(),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      tooltip: '关闭',
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
                 ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     ),
   ),
 );
+
+Future<void> _copyAttachmentImage(
+  BuildContext context,
+  Attachment attachment,
+) async {
+  try {
+    await Pasteboard.writeImage(await File(attachment.localPath).readAsBytes());
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('图片已复制')));
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('复制图片失败：$e')));
+    }
+  }
+}
 
 class EmptyCard extends StatelessWidget {
   const EmptyCard({super.key, required this.title, required this.subtitle});
