@@ -81,6 +81,14 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    if (c.initializing) {
+      return StartupSplash(
+        imagePath: widget.appearance.splashImagePath,
+        status: c.syncState.phase == SyncPhase.syncing
+            ? '正在同步最新内容…'
+            : '正在准备你的内容…',
+      );
+    }
     if (c.error != null && !c.loading) {
       return Scaffold(
         body: Center(
@@ -258,6 +266,96 @@ class _AppShellState extends State<AppShell> {
             ),
           ),
           Expanded(child: content),
+        ],
+      ),
+    );
+  }
+}
+
+class StartupSplash extends StatelessWidget {
+  const StartupSplash({
+    super.key,
+    required this.imagePath,
+    required this.status,
+  });
+
+  final String? imagePath;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final customImage = imagePath == null
+        ? null
+        : Image.file(
+            File(imagePath!),
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+          );
+    return Scaffold(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xffdcebe2), Color(0xfff7f3e8)],
+              ),
+            ),
+          ),
+          ?customImage,
+          if (customImage != null)
+            const ColoredBox(color: Color.fromRGBO(16, 43, 34, 0.42)),
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircleAvatar(
+                  radius: 42,
+                  backgroundColor: Color(0xff204a39),
+                  foregroundColor: Colors.white,
+                  child: Text(
+                    '拾',
+                    style: TextStyle(fontSize: 38, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  '拾光',
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    color: customImage == null
+                        ? const Color(0xff173b2f)
+                        : Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  status,
+                  style: TextStyle(
+                    color: customImage == null
+                        ? const Color(0xff496158)
+                        : Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: 180,
+                  child: LinearProgressIndicator(
+                    color: customImage == null
+                        ? const Color(0xff27634d)
+                        : Colors.white,
+                    backgroundColor: customImage == null
+                        ? const Color(0x3327634d)
+                        : Colors.white30,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1063,6 +1161,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool savingSync = false;
   final syncUrl = TextEditingController();
   final syncKey = TextEditingController();
+  final syncDelay = TextEditingController(text: '10');
   final email = TextEditingController();
   final password = TextEditingController();
 
@@ -1072,6 +1171,7 @@ class _SettingsPageState extends State<SettingsPage> {
     SyncConfig.load().then((value) {
       syncUrl.text = value.url;
       syncKey.text = value.anonKey;
+      syncDelay.text = value.autoSyncDelaySeconds.toString();
       if (mounted) setState(() {});
     });
   }
@@ -1080,6 +1180,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void dispose() {
     syncUrl.dispose();
     syncKey.dispose();
+    syncDelay.dispose();
     email.dispose();
     password.dispose();
     super.dispose();
@@ -1203,6 +1304,83 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
         const SizedBox(height: 14),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '开屏画面',
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '首次加载和登录同步期间显示，不包含广告。可使用应用默认画面，也可以选择自己的图片。',
+                  style: TextStyle(color: Colors.black54),
+                ),
+                if (widget.appearance.splashImagePath != null) ...[
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.file(
+                      File(widget.appearance.splashImagePath!),
+                      width: 220,
+                      height: 110,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final result = await FilePicker.pickFiles(
+                          type: FileType.custom,
+                          allowedExtensions: const [
+                            'png',
+                            'jpg',
+                            'jpeg',
+                            'webp',
+                          ],
+                        );
+                        if (result.isEmpty || result.single.path == null) {
+                          return;
+                        }
+                        try {
+                          await widget.appearance.importSplashImage(
+                            result.single.path!,
+                          );
+                          if (mounted) setState(() {});
+                          widget.onMessage('自定义开屏画面已保存');
+                        } catch (error) {
+                          widget.onMessage('开屏画面设置失败：$error');
+                        }
+                      },
+                      icon: const Icon(Icons.image_outlined),
+                      label: const Text('选择自定义图片'),
+                    ),
+                    if (widget.appearance.splashImagePath != null)
+                      TextButton.icon(
+                        onPressed: () async {
+                          await widget.appearance.useDefaultSplash();
+                          if (mounted) setState(() {});
+                          widget.onMessage('已恢复默认开屏画面');
+                        },
+                        icon: const Icon(Icons.restore),
+                        label: const Text('恢复默认'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
         if (!Platform.isAndroid)
           Card(
             child: Padding(
@@ -1294,17 +1472,35 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 const SizedBox(height: 10),
+                TextField(
+                  controller: syncDelay,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(
+                    labelText: '修改后自动同步延迟',
+                    suffixText: '秒',
+                    helperText: '连续修改会重新计时，可设置 1–3600 秒，默认 10 秒',
+                  ),
+                ),
+                const SizedBox(height: 10),
                 FilledButton.tonal(
                   onPressed: savingSync
                       ? null
                       : () async {
+                          final delay = int.tryParse(syncDelay.text);
+                          if (delay == null || delay < 1 || delay > 3600) {
+                            widget.onMessage('自动同步延迟必须是 1–3600 秒');
+                            return;
+                          }
                           setState(() => savingSync = true);
                           await SyncConfig(
                             url: syncUrl.text,
                             anonKey: syncKey.text,
+                            autoSyncDelaySeconds: delay,
                           ).save();
+                          widget.controller.setAutoSyncDelaySeconds(delay);
                           if (mounted) setState(() => savingSync = false);
-                          widget.onMessage('同步配置已保存，重启应用后生效');
+                          widget.onMessage('同步配置已保存；延迟已立即生效，云端地址变更需重启');
                         },
                   child: const Text('保存同步配置'),
                 ),

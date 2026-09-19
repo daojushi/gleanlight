@@ -42,6 +42,7 @@ Future<void> main() async {
     storageManager,
     syncProvider,
     supabase,
+    autoSyncDelaySeconds: syncConfig.autoSyncDelaySeconds,
   );
   final captureRequests = ValueNotifier<String?>(null);
   final desktop = DesktopIntegration(captureRequests);

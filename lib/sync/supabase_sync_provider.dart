@@ -16,6 +16,7 @@ class SupabaseSyncProvider implements SyncProvider {
   final String deviceId;
   final _states = StreamController<SyncState>.broadcast();
   StreamSubscription<List<ConnectivityResult>>? _network;
+  StreamSubscription<AuthState>? _auth;
   SyncState _state = const SyncState(SyncPhase.idle);
   Future<void>? _activeSync;
 
@@ -30,6 +31,13 @@ class SupabaseSyncProvider implements SyncProvider {
 
   @override
   Future<void> start() async {
+    _auth = client.auth.onAuthStateChange.listen((state) {
+      if (state.session != null &&
+          (state.event == AuthChangeEvent.initialSession ||
+              state.event == AuthChangeEvent.signedIn)) {
+        sync();
+      }
+    });
     _network = Connectivity().onConnectivityChanged.listen((results) {
       if (!results.contains(ConnectivityResult.none) &&
           client.auth.currentUser != null) {
@@ -134,6 +142,7 @@ class SupabaseSyncProvider implements SyncProvider {
   @override
   Future<void> stop() async {
     await _network?.cancel();
+    await _auth?.cancel();
     await _states.close();
   }
 }

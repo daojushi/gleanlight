@@ -26,16 +26,19 @@ class AppearanceSettings extends ChangeNotifier {
   static const _choiceKey = 'appearance.fontChoice';
   static const _customPathKey = 'appearance.customFontPath';
   static const _customFamily = 'ItsImportedFont';
+  static const _splashPathKey = 'appearance.splashImagePath';
 
   final SharedPreferences _preferences;
   String selectedId;
   String? fontFamily;
   String? customFontPath;
+  String? splashImagePath;
 
   static Future<AppearanceSettings> load() async {
     final preferences = await SharedPreferences.getInstance();
     final selected = preferences.getString(_choiceKey) ?? 'system';
     final customPath = preferences.getString(_customPathKey);
+    final configuredSplash = preferences.getString(_splashPathKey);
     String? family = choices
         .where((choice) => choice.id == selected)
         .firstOrNull
@@ -48,8 +51,13 @@ class AppearanceSettings extends ChangeNotifier {
         family = null;
       }
     }
+    final splashPath =
+        configuredSplash != null && await File(configuredSplash).exists()
+        ? configuredSplash
+        : null;
     return AppearanceSettings._(preferences, selected, family)
-      ..customFontPath = customPath;
+      ..customFontPath = customPath
+      ..splashImagePath = splashPath;
   }
 
   Future<void> select(String id) async {
@@ -79,6 +87,29 @@ class AppearanceSettings extends ChangeNotifier {
     fontFamily = _customFamily;
     await _preferences.setString(_customPathKey, target);
     await _preferences.setString(_choiceKey, selectedId);
+    notifyListeners();
+  }
+
+  Future<void> importSplashImage(String sourcePath) async {
+    final source = File(sourcePath);
+    if (!await source.exists()) throw StateError('图片文件不存在');
+    final extension = p.extension(source.path).toLowerCase();
+    if (!const ['.png', '.jpg', '.jpeg', '.webp'].contains(extension)) {
+      throw ArgumentError('仅支持 PNG、JPG 或 WebP 图片');
+    }
+    final support = await getApplicationSupportDirectory();
+    final directory = Directory(p.join(support.path, 'appearance'));
+    await directory.create(recursive: true);
+    final target = p.join(directory.path, 'splash$extension');
+    await source.copy(target);
+    splashImagePath = target;
+    await _preferences.setString(_splashPathKey, target);
+    notifyListeners();
+  }
+
+  Future<void> useDefaultSplash() async {
+    splashImagePath = null;
+    await _preferences.remove(_splashPathKey);
     notifyListeners();
   }
 

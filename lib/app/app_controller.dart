@@ -15,14 +15,19 @@ class AppController extends ChangeNotifier {
     this.repository,
     this.storageManager,
     this.syncProvider,
-    this.supabase,
-  );
+    this.supabase, {
+    int autoSyncDelaySeconds = 10,
+  }) : _autoSyncDelaySeconds = autoSyncDelaySeconds.clamp(1, 3600);
   AppRepository repository;
   final StorageManager storageManager;
   final SyncProvider syncProvider;
   final SupabaseClient? supabase;
   SyncState syncState = const SyncState(SyncPhase.disabled);
   StreamSubscription<SyncState>? _syncSubscription;
+  Timer? _autoSyncTimer;
+  int _autoSyncDelaySeconds;
+  bool _syncRequestedByController = false;
+  bool initializing = true;
   bool loading = true;
   Object? error;
   List<Idea> ideas = const [];
@@ -31,17 +36,32 @@ class AppController extends ChangeNotifier {
   List<Topic> topics = const [];
 
   Future<void> initialize() async {
+    initializing = true;
+    loading = true;
+    notifyListeners();
     try {
       await repository.initialize();
       syncState = syncProvider.state;
       _syncSubscription = syncProvider.states.listen((value) {
+        final completedAutomaticSync =
+            syncState.phase == SyncPhase.syncing &&
+            value.phase == SyncPhase.idle &&
+            !_syncRequestedByController;
         syncState = value;
         notifyListeners();
+        if (completedAutomaticSync) unawaited(reload());
       });
       await syncProvider.start();
-      await reload();
+      if (currentUser != null) {
+        await syncOnOpen();
+      } else {
+        await reload();
+      }
+      initializing = false;
+      notifyListeners();
     } catch (e) {
       error = e;
+      initializing = false;
       loading = false;
       notifyListeners();
     }
@@ -71,8 +91,57 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> syncNow() async {
-    await syncProvider.sync();
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = null;
+    _syncRequestedByController = true;
+    try {
+      await syncProvider.sync();
+    } finally {
+      _syncRequestedByController = false;
+    }
     await reload();
+  }
+
+  Future<void> syncOnOpen() async {
+    if (currentUser == null) return;
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = null;
+    loading = true;
+    notifyListeners();
+    _syncRequestedByController = true;
+    try {
+      await syncProvider.sync();
+    } catch (_) {
+      // Startup/resume must still expose the safe local copy when offline.
+    } finally {
+      _syncRequestedByController = false;
+    }
+    await reload();
+  }
+
+  int get autoSyncDelaySeconds => _autoSyncDelaySeconds;
+
+  void setAutoSyncDelaySeconds(int seconds) {
+    _autoSyncDelaySeconds = seconds.clamp(1, 3600);
+    if (_autoSyncTimer?.isActive ?? false) _scheduleAutoSync();
+    notifyListeners();
+  }
+
+  void _scheduleAutoSync() {
+    if (currentUser == null) return;
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = Timer(
+      Duration(seconds: _autoSyncDelaySeconds),
+      _runScheduledSync,
+    );
+  }
+
+  Future<void> _runScheduledSync() async {
+    try {
+      await syncNow();
+    } catch (_) {
+      // The provider exposes the error through syncState; local edits stay safe.
+    }
   }
 
   Future<List<SyncConflict>> syncConflicts() async {
@@ -85,6 +154,7 @@ class AppController extends ChangeNotifier {
     if (repo is! SqliteAppRepository) return;
     await repo.resolveSyncConflict(id, useRemote: useRemote);
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<void> ignoreAllSyncConflicts() async {
@@ -99,10 +169,12 @@ class AppController extends ChangeNotifier {
     if (repo is! SqliteAppRepository) return;
     await repo.resolveAllSyncConflicts(useRemote: useRemote);
     await reload();
+    _scheduleAutoSync();
   }
 
   @override
   void dispose() {
+    _autoSyncTimer?.cancel();
     _syncSubscription?.cancel();
     syncProvider.stop();
     super.dispose();
@@ -148,6 +220,7 @@ class AppController extends ChangeNotifier {
       );
     }
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<String> saveIdea({
@@ -163,6 +236,7 @@ class AppController extends ChangeNotifier {
       topicIds: topicIds,
     );
     await reload();
+    _scheduleAutoSync();
     return id;
   }
 
@@ -174,6 +248,7 @@ class AppController extends ChangeNotifier {
       topicIds: idea.topics.map((topic) => topic.id).toList(),
     );
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<void> saveTask({
@@ -193,6 +268,7 @@ class AppController extends ChangeNotifier {
       topicIds: topicIds,
     );
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<void> saveSchedule({
@@ -214,16 +290,19 @@ class AppController extends ChangeNotifier {
       topicIds: topicIds,
     );
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<void> saveTopic(String name, String description) async {
     await repository.saveTopic(name: name, description: description);
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<void> delete(String type, String id) async {
     await repository.softDelete(type, id);
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<TopicAggregate?> topicAggregate(String id) =>
@@ -237,6 +316,7 @@ class AppController extends ChangeNotifier {
       attachment.bytes,
     );
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<void> addAttachmentToIdea(
@@ -249,11 +329,13 @@ class AppController extends ChangeNotifier {
       attachment.mimeType,
       attachment.bytes,
     );
+    _scheduleAutoSync();
   }
 
   Future<void> removeAttachment(String id) async {
     await repository.removeAttachment(id);
     await reload();
+    _scheduleAutoSync();
   }
 
   Future<String> exportBackup(String path) => repository.exportBackup(path);
