@@ -592,6 +592,8 @@ class _CapturePageState extends State<CapturePage> {
                               LogicalKeyboardKey.keyV,
                               control: true,
                             ): pasteClipboard,
+                            const SingleActivator(LogicalKeyboardKey.tab): () =>
+                                _insertTab(text),
                           },
                           child: TextField(
                             controller: text,
@@ -599,7 +601,7 @@ class _CapturePageState extends State<CapturePage> {
                             minLines: 8,
                             maxLines: null,
                             decoration: const InputDecoration(
-                              hintText: '写下你的想法……\n\n支持多段文字、换行，Ctrl+V 可直接粘贴图片。',
+                              hintText: '写下你的想法……\n\n支持多段文字、换行、Tab 缩进，Ctrl+V 可直接粘贴图片。',
                               border: InputBorder.none,
                             ),
                           ),
@@ -755,6 +757,16 @@ Future<void> _pasteClipboardText(TextEditingController controller) async {
   controller.value = TextEditingValue(
     text: controller.text.replaceRange(start, end, value),
     selection: TextSelection.collapsed(offset: start + value.length),
+  );
+}
+
+void _insertTab(TextEditingController controller) {
+  final selection = controller.selection;
+  final start = selection.isValid ? selection.start : controller.text.length;
+  final end = selection.isValid ? selection.end : controller.text.length;
+  controller.value = TextEditingValue(
+    text: controller.text.replaceRange(start, end, '\t'),
+    selection: TextSelection.collapsed(offset: start + 1),
   );
 }
 
