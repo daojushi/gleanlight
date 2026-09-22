@@ -120,6 +120,86 @@ void main() {
     }
   });
 
+  test('schedule, Todo and Topic changes merge in both directions', () async {
+    final directory = await Directory.systemTemp.createTemp('its-agenda-sync-');
+    final windows = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: '${directory.path}\\windows.sqlite',
+    );
+    final android = SqliteAppRepository(
+      factory: databaseFactoryFfi,
+      databasePath: '${directory.path}\\android.sqlite',
+    );
+    try {
+      await windows.initialize();
+      await android.initialize();
+      await windows.saveTopic(name: '工作', description: '跨设备主题');
+      final topicId = (await windows.listTopics()).single.id;
+      await windows.saveSchedule(
+        title: '周会',
+        description: '会议室',
+        date: DateTime(2026, 10, 5),
+        startTime: '09:00',
+        endTime: '10:00',
+        topicIds: [topicId],
+      );
+      await windows.saveTask(
+        title: '准备材料',
+        description: '周会资料',
+        status: TaskStatus.todo,
+        deadline: DateTime(2026, 10, 4),
+        topicIds: [topicId],
+      );
+      await android.mergeSyncSnapshot(
+        await windows.exportSyncSnapshot(),
+        sourceDevice: 'windows',
+      );
+      final schedule = (await android.listSchedules()).single;
+      final task = (await android.listTasks()).single;
+      expect(schedule.title, '周会');
+      expect(schedule.date, DateTime(2026, 10, 5));
+      expect(schedule.topics.single.id, topicId);
+      expect(task.title, '准备材料');
+      expect(task.topics.single.id, topicId);
+
+      await android.saveSchedule(
+        id: schedule.id,
+        title: '周会改期',
+        description: '线上',
+        date: DateTime(2026, 10, 6),
+        topicIds: [topicId],
+      );
+      await android.saveTask(
+        id: task.id,
+        title: '准备材料',
+        description: '已准备',
+        status: TaskStatus.done,
+        topicIds: [topicId],
+      );
+      await windows.mergeSyncSnapshot(
+        await android.exportSyncSnapshot(),
+        sourceDevice: 'android',
+      );
+      expect((await windows.listSchedules()).single.title, '周会改期');
+      expect(
+        (await windows.listSchedules()).single.date,
+        DateTime(2026, 10, 6),
+      );
+      expect((await windows.listTasks()).single.status, TaskStatus.done);
+
+      await android.softDelete('schedule', schedule.id);
+      await windows.mergeSyncSnapshot(
+        await android.exportSyncSnapshot(),
+        sourceDevice: 'android',
+      );
+      expect(await windows.listSchedules(), isEmpty);
+    } finally {
+      await windows.close();
+      await android.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('repositories own independent handles for the same database', () async {
     final directory = await Directory.systemTemp.createTemp(
       'its-connection-test-',

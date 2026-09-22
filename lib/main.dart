@@ -13,6 +13,7 @@ import 'sync/sync_config.dart';
 import 'sync/background_sync.dart';
 import 'sync/sync_provider.dart';
 import 'sync/supabase_sync_provider.dart';
+import 'sync/sync_http_client.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +28,7 @@ Future<void> main() async {
     await Supabase.initialize(
       url: syncConfig.url,
       publishableKey: syncConfig.anonKey,
+      httpClient: createSyncHttpClient(),
     );
     supabase = Supabase.instance.client;
     final preferences = await SharedPreferences.getInstance();
@@ -42,6 +44,7 @@ Future<void> main() async {
     storageManager,
     syncProvider,
     supabase,
+    activeSyncConfig: syncConfig,
     autoSyncDelaySeconds: syncConfig.autoSyncDelaySeconds,
   );
   final captureRequests = ValueNotifier<String?>(null);

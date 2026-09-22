@@ -10,6 +10,9 @@ import '../data/sqlite_app_repository.dart';
 import '../data/storage_manager.dart';
 import 'supabase_sync_provider.dart';
 import 'sync_config.dart';
+import 'sync_http_client.dart';
+
+import 'package:http/http.dart' as http;
 
 const _backgroundSyncTask = 'its.background.sync';
 
@@ -20,13 +23,18 @@ void syncCallbackDispatcher() {
     WidgetsFlutterBinding.ensureInitialized();
     SqliteAppRepository? repository;
     SupabaseSyncProvider? provider;
+    http.Client? transport;
+    bool initialized = false;
     try {
       final config = await SyncConfig.load();
       if (!config.enabled) return true;
+      transport = createSyncHttpClient();
       await Supabase.initialize(
         url: config.url,
         publishableKey: config.anonKey,
+        httpClient: transport,
       );
+      initialized = true;
       if (Supabase.instance.client.auth.currentUser == null) return true;
       final storage = await StorageManager.load();
       repository = storage.createRepository();
@@ -46,6 +54,8 @@ void syncCallbackDispatcher() {
     } finally {
       await provider?.stop();
       await repository?.close();
+      if (initialized) await Supabase.instance.dispose();
+      transport?.close();
     }
   });
 }

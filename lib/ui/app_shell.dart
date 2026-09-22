@@ -12,6 +12,7 @@ import '../app/app_controller.dart';
 import '../app/appearance_settings.dart';
 import '../domain/models.dart';
 import '../sync/sync_config.dart';
+import '../sync/sync_diagnostics.dart';
 import '../sync/sync_provider.dart';
 
 class AppShell extends StatefulWidget {
@@ -30,6 +31,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int index = 0;
+  SyncPhase? _previousSyncPhase;
   AppController get c => widget.controller;
   @override
   void initState() {
@@ -46,7 +48,48 @@ class _AppShellState extends State<AppShell> {
   }
 
   void _changed() {
+    final phase = c.syncState.phase;
+    if (phase == SyncPhase.error && _previousSyncPhase != SyncPhase.error) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !c.initializing) {
+          message('同步失败：${c.syncState.message ?? '未知错误'}');
+        }
+      });
+    }
+    _previousSyncPhase = phase;
     if (mounted) setState(() {});
+  }
+
+  Future<void> _syncAll() async {
+    if (c.currentUser == null) {
+      message('请先在设置中登录，才能同步设备间内容');
+      return;
+    }
+    try {
+      await c.syncNow();
+      if (mounted) message(c.syncState.message ?? '同步完成');
+    } catch (error) {
+      if (mounted && c.syncState.phase != SyncPhase.error) {
+        message('同步失败：$error');
+      }
+    }
+  }
+
+  Widget _syncButton() {
+    final syncing = c.syncState.phase == SyncPhase.syncing;
+    final failed = c.syncState.phase == SyncPhase.error;
+    return IconButton(
+      tooltip: syncing
+          ? '正在同步全部内容'
+          : failed
+          ? '同步失败，点击重试：${c.syncState.message}'
+          : '同步全部内容',
+      onPressed: syncing ? null : _syncAll,
+      icon: Icon(
+        failed ? Icons.sync_problem_rounded : Icons.sync_rounded,
+        color: failed ? Theme.of(context).colorScheme.error : null,
+      ),
+    );
   }
 
   void _openCapture() {
@@ -120,12 +163,13 @@ class _AppShellState extends State<AppShell> {
               HistoryIdeasPage(controller: c, onMessage: message),
               TasksPage(controller: c, onMessage: message),
               SchedulesPage(controller: c, onMessage: message),
-              TopicsPage(controller: c, onMessage: message),
+              CalendarPage(controller: c, onMessage: message),
               SettingsPage(
                 controller: c,
                 appearance: widget.appearance,
                 onMessage: message,
               ),
+              TopicsPage(controller: c, onMessage: message),
             ],
           );
     if (mobile) {
@@ -133,10 +177,16 @@ class _AppShellState extends State<AppShell> {
         appBar: AppBar(
           title: Text(_nav[index].$1),
           actions: [
+            _syncButton(),
             IconButton(
               tooltip: '历史灵感',
               onPressed: () => setState(() => index = 2),
               icon: const Icon(Icons.history_rounded),
+            ),
+            IconButton(
+              tooltip: 'Topic',
+              onPressed: () => setState(() => index = 7),
+              icon: const Icon(Icons.tag_rounded),
             ),
             IconButton(
               tooltip: '设置',
@@ -217,8 +267,7 @@ class _AppShellState extends State<AppShell> {
                     ],
                   ),
                 ),
-                ...List.generate(
-                  _nav.length,
+                ...[0, 1, 3, 4, 5].map(
                   (i) => Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
@@ -265,7 +314,40 @@ class _AppShellState extends State<AppShell> {
               ],
             ),
           ),
-          Expanded(child: content),
+          Expanded(
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 8, 16, 0),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _syncButton(),
+                        IconButton(
+                          tooltip: '历史灵感',
+                          onPressed: () => setState(() => index = 2),
+                          icon: const Icon(Icons.history_rounded),
+                        ),
+                        IconButton(
+                          tooltip: 'Topic',
+                          onPressed: () => setState(() => index = 7),
+                          icon: const Icon(Icons.tag_rounded),
+                        ),
+                        IconButton(
+                          tooltip: '设置',
+                          onPressed: () => setState(() => index = 6),
+                          icon: const Icon(Icons.settings_outlined),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(child: content),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -368,8 +450,9 @@ const _nav = [
   ('历史灵感', Icons.history_rounded),
   ('Todo', Icons.check_rounded),
   ('日程', Icons.calendar_today_outlined),
-  ('Topic', Icons.tag_rounded),
+  ('日历', Icons.calendar_month_outlined),
   ('设置', Icons.settings_outlined),
+  ('Topic', Icons.tag_rounded),
 ];
 
 class PageFrame extends StatelessWidget {
@@ -1091,7 +1174,7 @@ class SchedulesPage extends StatelessWidget {
     return PageFrame(
       kicker: 'SCHEDULE',
       title: '日程',
-      subtitle: '今日与未来共 ${future.length} 项',
+      subtitle: '共 ${controller.schedules.length} 项 · 今日与未来 ${future.length} 项',
       action: FilledButton.icon(
         onPressed: () =>
             showScheduleDialog(context, controller, null, onMessage),
@@ -1106,7 +1189,7 @@ class SchedulesPage extends StatelessWidget {
               .where(
                 (s) =>
                     (status == '全部' || status == null
-                        ? !s.date.isBefore(today)
+                        ? true
                         : status == '今日'
                         ? DateUtils.isSameDay(s.date, today)
                         : s.date.isAfter(today)) &&
@@ -1154,6 +1237,199 @@ class SchedulesPage extends StatelessWidget {
   }
 }
 
+class CalendarPage extends StatefulWidget {
+  const CalendarPage({
+    super.key,
+    required this.controller,
+    required this.onMessage,
+  });
+  final AppController controller;
+  final void Function(Object) onMessage;
+
+  @override
+  State<CalendarPage> createState() => _CalendarPageState();
+}
+
+class _CalendarPageState extends State<CalendarPage> {
+  late DateTime month = DateTime(DateTime.now().year, DateTime.now().month);
+  late DateTime selected = DateUtils.dateOnly(DateTime.now());
+
+  void changeMonth(int offset) {
+    setState(() {
+      month = DateTime(month.year, month.month + offset);
+      selected = DateTime(month.year, month.month);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final schedules = widget.controller.schedules;
+    final counts = <DateTime, int>{};
+    for (final schedule in schedules) {
+      final day = DateUtils.dateOnly(schedule.date);
+      counts[day] = (counts[day] ?? 0) + 1;
+    }
+    final selectedItems =
+        schedules
+            .where((schedule) => DateUtils.isSameDay(schedule.date, selected))
+            .toList()
+          ..sort((a, b) => (a.startTime ?? '').compareTo(b.startTime ?? ''));
+    final firstWeekday = DateTime(month.year, month.month).weekday - 1;
+    final days = DateUtils.getDaysInMonth(month.year, month.month);
+    final cells = ((firstWeekday + days + 6) ~/ 7) * 7;
+    final mobile = MediaQuery.sizeOf(context).width < 760;
+    return PageFrame(
+      kicker: 'CALENDAR',
+      title: '日历',
+      subtitle: '有日程的日期会显示标记，选择日期查看安排',
+      action: FilledButton.icon(
+        onPressed: () => showScheduleDialog(
+          context,
+          widget.controller,
+          null,
+          widget.onMessage,
+        ),
+        icon: const Icon(Icons.add),
+        label: const Text('新建日程'),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                tooltip: '上个月',
+                onPressed: () => changeMonth(-1),
+                icon: const Icon(Icons.chevron_left),
+              ),
+              Expanded(
+                child: Text(
+                  DateFormat('yyyy 年 M 月').format(month),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              IconButton(
+                tooltip: '下个月',
+                onPressed: () => changeMonth(1),
+                icon: const Icon(Icons.chevron_right),
+              ),
+              if (!mobile)
+                TextButton(
+                  onPressed: () => setState(() {
+                    selected = DateUtils.dateOnly(DateTime.now());
+                    month = DateTime(selected.year, selected.month);
+                  }),
+                  child: const Text('今天'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 7,
+              childAspectRatio: mobile ? 0.75 : 1.35,
+              mainAxisSpacing: 4,
+              crossAxisSpacing: 4,
+            ),
+            itemCount: cells + 7,
+            itemBuilder: (context, index) {
+              if (index < 7) {
+                return Center(
+                  child: Text(const ['一', '二', '三', '四', '五', '六', '日'][index]),
+                );
+              }
+              final number = index - 7 - firstWeekday + 1;
+              if (number < 1 || number > days) return const SizedBox.shrink();
+              final date = DateTime(month.year, month.month, number);
+              final count = counts[date] ?? 0;
+              final isSelected = DateUtils.isSameDay(date, selected);
+              final isToday = DateUtils.isSameDay(date, DateTime.now());
+              return InkWell(
+                key: ValueKey(
+                  'calendar-${date.year}-${date.month}-${date.day}',
+                ),
+                borderRadius: BorderRadius.circular(10),
+                onTap: () => setState(() => selected = date),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? const Color(0xffd6eee2)
+                        : const Color(0xfff4f8f5),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isSelected || isToday
+                          ? const Color(0xff27634d)
+                          : const Color(0xffe0e8e1),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '$number',
+                        style: TextStyle(
+                          fontWeight: isToday ? FontWeight.bold : null,
+                        ),
+                      ),
+                      if (count > 0)
+                        Text(
+                          '$count 项',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xff27634d),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          Text(
+            '${DateFormat('yyyy-MM-dd').format(selected)} · ${selectedItems.length} 项日程',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
+          if (selectedItems.isEmpty)
+            const EmptyCard(title: '当天没有日程', subtitle: '选择有标记的日期查看安排。')
+          else
+            ...selectedItems.map(
+              (schedule) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: EntityCard(
+                  title: schedule.title,
+                  description: schedule.description,
+                  status: schedule.startTime == null
+                      ? '全天'
+                      : '${schedule.startTime}${schedule.endTime == null ? '' : ' – ${schedule.endTime}'}',
+                  topics: schedule.topics,
+                  trailing: DateFormat('yyyy-MM-dd').format(schedule.date),
+                  onEdit: () => showScheduleDialog(
+                    context,
+                    widget.controller,
+                    schedule,
+                    widget.onMessage,
+                  ),
+                  onDelete: () => confirmDelete(
+                    context,
+                    widget.controller,
+                    'schedule',
+                    schedule.id,
+                    widget.onMessage,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
@@ -1171,11 +1447,46 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool moving = false;
   bool savingSync = false;
+  bool diagnosingSync = false;
   final syncUrl = TextEditingController();
   final syncKey = TextEditingController();
   final syncDelay = TextEditingController(text: '10');
   final email = TextEditingController();
   final password = TextEditingController();
+
+  Future<void> runSyncDiagnostics() async {
+    setState(() => diagnosingSync = true);
+    try {
+      final config =
+          widget.controller.activeSyncConfig ?? await SyncConfig.load();
+      final report = await diagnoseSync(config, widget.controller.supabase);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('同步诊断结果'),
+          content: SingleChildScrollView(child: SelectableText(report)),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: report));
+                if (mounted) widget.onMessage('诊断结果已复制');
+              },
+              child: const Text('复制结果'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (mounted) widget.onMessage('无法完成诊断，请检查同步配置');
+    } finally {
+      if (mounted) setState(() => diagnosingSync = false);
+    }
+  }
 
   @override
   void initState() {
@@ -1473,7 +1784,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 TextField(
                   controller: syncUrl,
                   keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(labelText: 'Supabase URL'),
+                  decoration: const InputDecoration(
+                    labelText: 'Supabase URL',
+                    helperText: '仅填写项目根地址，例如 https://项目编号.supabase.co',
+                    helperMaxLines: 2,
+                  ),
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -1505,16 +1820,33 @@ class _SettingsPageState extends State<SettingsPage> {
                             return;
                           }
                           setState(() => savingSync = true);
-                          await SyncConfig(
-                            url: syncUrl.text,
-                            anonKey: syncKey.text,
-                            autoSyncDelaySeconds: delay,
-                          ).save();
-                          widget.controller.setAutoSyncDelaySeconds(delay);
-                          if (mounted) setState(() => savingSync = false);
-                          widget.onMessage('同步配置已保存；延迟已立即生效，云端地址变更需重启');
+                          try {
+                            await SyncConfig(
+                              url: syncUrl.text,
+                              anonKey: syncKey.text,
+                              autoSyncDelaySeconds: delay,
+                            ).save();
+                            final saved = await SyncConfig.load();
+                            if (!mounted) return;
+                            syncUrl.text = saved.url;
+                            widget.controller.setAutoSyncDelaySeconds(delay);
+                            widget.onMessage('同步配置已保存；延迟已立即生效，云端地址变更需重启');
+                          } on FormatException catch (error) {
+                            if (mounted) widget.onMessage(error.message);
+                          } finally {
+                            if (mounted) setState(() => savingSync = false);
+                          }
                         },
                   child: const Text('保存同步配置'),
+                ),
+                TextButton.icon(
+                  onPressed: diagnosingSync ? null : runSyncDiagnostics,
+                  icon: const Icon(Icons.network_check),
+                  label: Text(diagnosingSync ? '正在诊断，请稍候…' : '一键诊断同步连接'),
+                ),
+                const Text(
+                  '诊断使用当前运行配置；更改地址或密钥后请先重启应用。',
+                  style: TextStyle(color: Colors.black54, fontSize: 12),
                 ),
                 const Divider(height: 32),
                 if (widget.controller.supabase == null)

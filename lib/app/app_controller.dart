@@ -9,6 +9,7 @@ import '../data/storage_manager.dart';
 import '../domain/models.dart';
 import '../sync/sync_provider.dart';
 import '../sync/sync_conflict.dart';
+import '../sync/sync_config.dart';
 
 class AppController extends ChangeNotifier {
   AppController(
@@ -16,12 +17,14 @@ class AppController extends ChangeNotifier {
     this.storageManager,
     this.syncProvider,
     this.supabase, {
+    this.activeSyncConfig,
     int autoSyncDelaySeconds = 10,
   }) : _autoSyncDelaySeconds = autoSyncDelaySeconds.clamp(1, 3600);
   AppRepository repository;
   final StorageManager storageManager;
   final SyncProvider syncProvider;
   final SupabaseClient? supabase;
+  final SyncConfig? activeSyncConfig;
   SyncState syncState = const SyncState(SyncPhase.disabled);
   StreamSubscription<SyncState>? _syncSubscription;
   Timer? _autoSyncTimer;
@@ -110,7 +113,9 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     _syncRequestedByController = true;
     try {
-      await syncProvider.sync();
+      // Let the user reach the local copy even if the cloud is slow. The
+      // in-flight sync keeps running and the state listener reloads on success.
+      await syncProvider.sync().timeout(const Duration(seconds: 15));
     } catch (_) {
       // Startup/resume must still expose the safe local copy when offline.
     } finally {
