@@ -1174,7 +1174,7 @@ class SchedulesPage extends StatelessWidget {
     return PageFrame(
       kicker: 'SCHEDULE',
       title: '日程',
-      subtitle: '共 ${controller.schedules.length} 项 · 今日与未来 ${future.length} 项',
+      subtitle: '今日与未来 ${future.length} 项',
       action: FilledButton.icon(
         onPressed: () =>
             showScheduleDialog(context, controller, null, onMessage),
@@ -1183,12 +1183,12 @@ class SchedulesPage extends StatelessWidget {
       ),
       child: SearchFilter(
         topics: controller.topics,
-        statuses: const ['今日', '未来', '全部'],
+        statuses: const ['今日', '未来'],
         builder: (query, topic, status) {
-          final items = controller.schedules
+          final items = future
               .where(
                 (s) =>
-                    (status == '全部' || status == null
+                    (status == null
                         ? true
                         : status == '今日'
                         ? DateUtils.isSameDay(s.date, today)
