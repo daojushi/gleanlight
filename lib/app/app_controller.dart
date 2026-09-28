@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../data/app_repository.dart';
 import '../data/sqlite_app_repository.dart';
@@ -10,6 +12,8 @@ import '../domain/models.dart';
 import '../sync/sync_provider.dart';
 import '../sync/sync_conflict.dart';
 import '../sync/sync_config.dart';
+import '../sync/supabase_sync_provider.dart';
+import '../sync/sync_http_client.dart';
 
 class AppController extends ChangeNotifier {
   AppController(
@@ -22,9 +26,9 @@ class AppController extends ChangeNotifier {
   }) : _autoSyncDelaySeconds = autoSyncDelaySeconds.clamp(1, 3600);
   AppRepository repository;
   final StorageManager storageManager;
-  final SyncProvider syncProvider;
-  final SupabaseClient? supabase;
-  final SyncConfig? activeSyncConfig;
+  SyncProvider syncProvider;
+  SupabaseClient? supabase;
+  SyncConfig? activeSyncConfig;
   SyncState syncState = const SyncState(SyncPhase.disabled);
   StreamSubscription<SyncState>? _syncSubscription;
   Timer? _autoSyncTimer;
@@ -44,16 +48,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     try {
       await repository.initialize();
-      syncState = syncProvider.state;
-      _syncSubscription = syncProvider.states.listen((value) {
-        final completedAutomaticSync =
-            syncState.phase == SyncPhase.syncing &&
-            value.phase == SyncPhase.idle &&
-            !_syncRequestedByController;
-        syncState = value;
-        notifyListeners();
-        if (completedAutomaticSync) unawaited(reload());
-      });
+      _listenToSyncProvider();
       await syncProvider.start();
       if (currentUser != null) {
         await syncOnOpen();
@@ -70,10 +65,76 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  void _listenToSyncProvider() {
+    syncState = syncProvider.state;
+    _syncSubscription = syncProvider.states.listen((value) {
+      final completedAutomaticSync =
+          syncState.phase == SyncPhase.syncing &&
+          value.phase == SyncPhase.idle &&
+          !_syncRequestedByController;
+      syncState = value;
+      notifyListeners();
+      if (completedAutomaticSync) unawaited(reload());
+    });
+  }
+
+  Future<void> applySyncConfig(SyncConfig config) async {
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = null;
+    await _syncSubscription?.cancel();
+    _syncSubscription = null;
+    await syncProvider.stop();
+
+    if (supabase != null) {
+      await Supabase.instance.dispose();
+    }
+    supabase = null;
+    syncProvider = const NoSyncProvider();
+
+    activeSyncConfig = config;
+    setAutoSyncDelaySeconds(config.autoSyncDelaySeconds);
+    if (!config.enabled) {
+      _listenToSyncProvider();
+      notifyListeners();
+      return;
+    }
+
+    try {
+      await Supabase.initialize(
+        url: config.url,
+        publishableKey: config.anonKey,
+        httpClient: createSyncHttpClient(),
+      );
+    } catch (_) {
+      _listenToSyncProvider();
+      notifyListeners();
+      rethrow;
+    }
+    final client = Supabase.instance.client;
+    final preferences = await SharedPreferences.getInstance();
+    var deviceId = preferences.getString('sync.deviceId');
+    if (deviceId == null) {
+      deviceId = const Uuid().v4();
+      await preferences.setString('sync.deviceId', deviceId);
+    }
+    final repo = repository;
+    if (repo is! SqliteAppRepository) {
+      await Supabase.instance.dispose();
+      _listenToSyncProvider();
+      notifyListeners();
+      throw StateError('当前数据源不支持云同步');
+    }
+    supabase = client;
+    syncProvider = SupabaseSyncProvider(repo, client, deviceId);
+    _listenToSyncProvider();
+    await syncProvider.start();
+    notifyListeners();
+  }
+
   User? get currentUser => supabase?.auth.currentUser;
   Future<void> signIn(String email, String password) async {
     final client = supabase;
-    if (client == null) throw StateError('请先保存 Supabase 配置并重启应用');
+    if (client == null) throw StateError('请先保存有效的 Supabase 配置');
     await client.auth.signInWithPassword(
       email: email.trim(),
       password: password,
@@ -83,7 +144,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> signUp(String email, String password) async {
     final client = supabase;
-    if (client == null) throw StateError('请先保存 Supabase 配置并重启应用');
+    if (client == null) throw StateError('请先保存有效的 Supabase 配置');
     await client.auth.signUp(email: email.trim(), password: password);
     notifyListeners();
   }

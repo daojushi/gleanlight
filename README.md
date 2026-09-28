@@ -66,8 +66,8 @@ flutter build apk --debug
 
 1. 创建 Supabase 项目。
 2. 在 SQL Editor 执行 [`supabase/schema.sql`](supabase/schema.sql)。
-3. 在应用“设置”中填写 Project URL 和 publishable/anon key，保存后重启。
-4. Windows 和 Android 使用同一账号注册或登录。
+3. 在应用“设置”中填写 Project URL 和 publishable/anon key 并保存。
+4. 登录/注册区域会立即出现；Windows 和 Android 使用同一账号注册或登录。
 
 同步实现位于可替换的 `SyncProvider` 边界之后，按 `updated_at` 合并记录、保留 soft-delete tombstone 并同步附件。等时异值冲突会保存到本地，可在“设置 → 查看同步冲突”中处理。未填写同步配置时，应用使用 `NoSyncProvider`，核心功能完全离线可用。
 

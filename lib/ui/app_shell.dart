@@ -1827,10 +1827,14 @@ class _SettingsPageState extends State<SettingsPage> {
                               autoSyncDelaySeconds: delay,
                             ).save();
                             final saved = await SyncConfig.load();
+                            await widget.controller.applySyncConfig(saved);
                             if (!mounted) return;
                             syncUrl.text = saved.url;
-                            widget.controller.setAutoSyncDelaySeconds(delay);
-                            widget.onMessage('同步配置已保存；延迟已立即生效，云端地址变更需重启');
+                            widget.onMessage(
+                              saved.enabled
+                                  ? '同步配置已启用，请在下方登录或注册'
+                                  : '同步配置已清除，当前仅使用本地模式',
+                            );
                           } on FormatException catch (error) {
                             if (mounted) widget.onMessage(error.message);
                           } finally {
@@ -1845,7 +1849,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   label: Text(diagnosingSync ? '正在诊断，请稍候…' : '一键诊断同步连接'),
                 ),
                 const Text(
-                  '诊断使用当前运行配置；更改地址或密钥后请先重启应用。',
+                  '诊断使用当前已保存的运行配置。',
                   style: TextStyle(color: Colors.black54, fontSize: 12),
                 ),
                 const Divider(height: 32),
