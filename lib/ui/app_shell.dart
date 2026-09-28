@@ -112,6 +112,45 @@ class _AppShellState extends State<AppShell> {
     }
   }
 
+  Future<void> _import() async {
+    final result = await FilePicker.pickFile(
+      dialogTitle: '选择拾光 ZIP 备份',
+      type: FileType.custom,
+      allowedExtensions: const ['zip'],
+    );
+    final path = result?.path;
+    if (path == null || !mounted) return;
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('导入并替换本地数据？'),
+            content: const Text(
+              '导入会用备份中的数据库和附件替换当前设备上的全部本地数据。'
+              '系统会先校验备份，失败时保留当前数据。建议先导出一次当前备份。',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('确认导入'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    try {
+      await c.importBackup(path);
+      if (mounted) message('备份导入成功，已恢复本地数据和附件');
+    } catch (error) {
+      if (mounted) message('导入失败，当前数据未被替换：$error');
+    }
+  }
+
   void message(Object value) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -296,6 +335,16 @@ class _AppShellState extends State<AppShell> {
                     leading: const Icon(Icons.archive_outlined),
                     title: const Text('导出备份'),
                     onTap: _export,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: ListTile(
+                    textColor: Colors.white60,
+                    iconColor: Colors.white60,
+                    leading: const Icon(Icons.unarchive_outlined),
+                    title: const Text('导入备份'),
+                    onTap: _import,
                   ),
                 ),
                 const Padding(

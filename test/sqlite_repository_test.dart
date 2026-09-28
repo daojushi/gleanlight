@@ -449,4 +449,98 @@ void main() {
       }
     },
   );
+
+  test('restores a validated backup and replaces local data', () async {
+    final sandbox = await Directory.systemTemp.createTemp('its-restore-test-');
+    SqliteAppRepository? backupRepo;
+    SqliteAppRepository? restored;
+    try {
+      final currentRoot = Directory('${sandbox.path}\\current')..createSync();
+      final backupRoot = Directory('${sandbox.path}\\backup-source')
+        ..createSync();
+      final manager = StorageManager.forTesting(
+        File('${sandbox.path}\\config\\settings.json'),
+        currentRoot.path,
+      );
+      final current = SqliteAppRepository(
+        factory: databaseFactoryFfi,
+        databasePath: '${currentRoot.path}\\its.sqlite',
+      );
+      await current.initialize();
+      await current.saveIdea(
+        content: '导入前',
+        status: IdeaStatus.newIdea,
+        topicIds: const [],
+      );
+
+      backupRepo = SqliteAppRepository(
+        factory: databaseFactoryFfi,
+        databasePath: '${backupRoot.path}\\its.sqlite',
+      );
+      await backupRepo.initialize();
+      final restoredId = await backupRepo.saveIdea(
+        content: '来自备份',
+        status: IdeaStatus.thinking,
+        topicIds: const [],
+      );
+      await backupRepo.addIdeaAttachment(
+        restoredId,
+        'restored.png',
+        'image/png',
+        Uint8List.fromList([4, 5, 6]),
+      );
+      final backup = await backupRepo.exportBackup(
+        '${sandbox.path}\\restore.zip',
+      );
+
+      restored = await manager.restoreBackup(current, backup);
+      final ideas = await restored.listIdeas();
+      expect(ideas, hasLength(1));
+      expect(ideas.single.content, '来自备份');
+      expect(
+        await File(ideas.single.attachments.single.localPath).readAsBytes(),
+        [4, 5, 6],
+      );
+    } finally {
+      await backupRepo?.close();
+      await restored?.close();
+      await sandbox.delete(recursive: true);
+    }
+  });
+
+  test('rejects an invalid backup without replacing local data', () async {
+    final sandbox = await Directory.systemTemp.createTemp(
+      'its-restore-invalid-test-',
+    );
+    SqliteAppRepository? current;
+    try {
+      final currentRoot = Directory('${sandbox.path}\\current')..createSync();
+      final manager = StorageManager.forTesting(
+        File('${sandbox.path}\\config\\settings.json'),
+        currentRoot.path,
+      );
+      current = SqliteAppRepository(
+        factory: databaseFactoryFfi,
+        databasePath: '${currentRoot.path}\\its.sqlite',
+      );
+      await current.initialize();
+      await current.saveIdea(
+        content: '必须保留',
+        status: IdeaStatus.newIdea,
+        topicIds: const [],
+      );
+      final archive = Archive()..addFile(ArchiveFile.string('data.json', '{}'));
+      await File('${sandbox.path}\\invalid.zip')
+          .writeAsBytes(ZipEncoder().encode(archive));
+
+      await expectLater(
+        manager.restoreBackup(current, '${sandbox.path}\\invalid.zip'),
+        throwsA(isA<StateError>()),
+      );
+      expect((await current.listIdeas()).single.content, '必须保留');
+    } finally {
+      await current?.close();
+      await sandbox.delete(recursive: true);
+    }
+  });
 }

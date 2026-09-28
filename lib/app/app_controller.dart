@@ -406,6 +406,36 @@ class AppController extends ChangeNotifier {
 
   Future<String> exportBackup(String path) => repository.exportBackup(path);
 
+  Future<void> importBackup(String path) async {
+    final repo = repository;
+    if (repo is! SqliteAppRepository) throw StateError('当前数据源不支持导入备份');
+    final syncConfig = activeSyncConfig;
+    final disabled = SyncConfig(
+      url: '',
+      anonKey: '',
+      autoSyncDelaySeconds: _autoSyncDelaySeconds,
+    );
+    if (supabase != null) await applySyncConfig(disabled);
+    loading = true;
+    notifyListeners();
+    try {
+      repository = await storageManager.restoreBackup(repo, path);
+      if (syncConfig != null && syncConfig.enabled) {
+        await applySyncConfig(syncConfig);
+      }
+      await reload();
+    } catch (_) {
+      if (syncConfig != null && syncConfig.enabled && supabase == null) {
+        try {
+          await applySyncConfig(syncConfig);
+        } catch (_) {}
+      }
+      loading = false;
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   String get storageLocation => storageManager.currentRoot;
   Future<void> moveStorage(String selectedDirectory) async {
     if (repository is! SqliteAppRepository) throw StateError('当前数据源不支持迁移');
