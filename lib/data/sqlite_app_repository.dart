@@ -828,23 +828,40 @@ class SqliteAppRepository implements AppRepository {
         }),
       );
       final encoder = ZipFileEncoder()..create(destinationPath);
-      encoder.addFile(File(_openedPath), 'database.sqlite');
-      encoder.addFile(jsonFile, 'data.json');
-      for (final idea in ideas) {
-        for (final attachment in idea.attachments) {
-          final file = File(attachment.localPath);
-          if (await file.exists()) {
-            encoder.addFile(
-              file,
-              'attachments/${attachment.id}${p.extension(attachment.localPath)}',
-            );
+      try {
+        // addFile is asynchronous and owns an input stream until it finishes.
+        // Waiting for every entry prevents Windows from keeping the temporary
+        // data file open while the export directory is being removed.
+        await encoder.addFile(File(_openedPath), 'database.sqlite');
+        await encoder.addFile(jsonFile, 'data.json');
+        for (final idea in ideas) {
+          for (final attachment in idea.attachments) {
+            final file = File(attachment.localPath);
+            if (await file.exists()) {
+              await encoder.addFile(
+                file,
+                'attachments/${attachment.id}${p.extension(attachment.localPath)}',
+              );
+            }
+          }
+        }
+      } finally {
+        await encoder.close();
+      }
+      return destinationPath;
+    } finally {
+      // Antivirus/indexing software may briefly retain a handle after the zip
+      // stream closes. Cleanup is best-effort and must not turn a completed
+      // backup into an apparent export failure.
+      for (var attempt = 0; attempt < 3 && await temp.exists(); attempt++) {
+        try {
+          await temp.delete(recursive: true);
+        } on FileSystemException {
+          if (attempt < 2) {
+            await Future<void>.delayed(Duration(milliseconds: 100 << attempt));
           }
         }
       }
-      await encoder.close();
-      return destinationPath;
-    } finally {
-      await temp.delete(recursive: true);
     }
   }
 }

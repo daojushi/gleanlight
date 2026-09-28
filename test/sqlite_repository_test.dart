@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:its_app/data/sqlite_app_repository.dart';
 import 'package:its_app/data/storage_manager.dart';
@@ -373,6 +374,23 @@ void main() {
       expect((await repo.listIdeas()).single.attachments, hasLength(1));
       final backup = await repo.exportBackup('${directory.path}\\backup.zip');
       expect(File(backup).lengthSync(), greaterThan(0));
+      final archive = ZipDecoder().decodeBytes(
+        await File(backup).readAsBytes(),
+      );
+      expect(
+        archive.files.map((file) => file.name),
+        containsAll([
+          'database.sqlite',
+          'data.json',
+          'attachments/${attachment.id}.png',
+        ]),
+      );
+      expect(archive.findFile('attachments/${attachment.id}.png')!.content, [
+        137,
+        80,
+        78,
+        71,
+      ]);
     } finally {
       await repo?.close();
       await directory.delete(recursive: true);
