@@ -67,7 +67,7 @@ class SqliteAppRepository implements AppRepository {
     _db = await selectedFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 5,
         // Foreground and Android WorkManager isolates may open the same file.
         // Each repository must own its handle so one isolate cannot close the
         // other isolate's active connection.
@@ -75,7 +75,7 @@ class SqliteAppRepository implements AppRepository {
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, _) async {
           await db.execute(
-            'CREATE TABLE ideas (id TEXT PRIMARY KEY, content TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)',
+            'CREATE TABLE ideas (id TEXT PRIMARY KEY, content TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, implemented_at TEXT)',
           );
           await db.execute(
             "CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, deadline TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, deleted_at TEXT)",
@@ -105,6 +105,11 @@ class SqliteAppRepository implements AppRepository {
           if (oldVersion < 2) await _createAttachments(db);
           if (oldVersion < 3) await _createSyncTables(db);
           if (oldVersion < 4) await _upgradeSyncConflicts(db);
+          if (oldVersion < 5) {
+            await db.execute(
+              'ALTER TABLE ideas ADD COLUMN implemented_at TEXT',
+            );
+          }
         },
       ),
     );
@@ -229,6 +234,7 @@ class SqliteAppRepository implements AppRepository {
     id: row['id']! as String,
     content: row['content']! as String,
     status: IdeaStatusX.fromDb(row['status']! as String),
+    implementedAt: _nullableDate(row['implemented_at']),
     createdAt: _date(row['created_at']),
     updatedAt: _date(row['updated_at']),
     topics: await _topicsFor('idea', row['id']! as String),
@@ -347,6 +353,15 @@ class SqliteAppRepository implements AppRepository {
     if (content.trim().isEmpty) throw ArgumentError('Idea 内容不能为空');
     final data = await _base('ideas', id)
       ..addAll({'content': content.trim(), 'status': status.dbValue});
+    final previous = id == null
+        ? const <Map<String, Object?>>[]
+        : await _db.query('ideas', where: 'id=?', whereArgs: [id]);
+    data['implemented_at'] = status == IdeaStatus.implemented
+        ? previous.isNotEmpty &&
+                  previous.first['status'] == IdeaStatus.implemented.dbValue
+              ? previous.first['implemented_at']
+              : data['updated_at']
+        : null;
     await _db.transaction((txn) async {
       await txn.insert(
         'ideas',
@@ -584,6 +599,14 @@ class SqliteAppRepository implements AppRepository {
             where: 'id=?',
             whereArgs: [remote['id']],
           );
+          if (table == 'ideas' && !remote.containsKey('implemented_at')) {
+            remote['implemented_at'] =
+                remote['status'] == IdeaStatus.implemented.dbValue &&
+                    local.isNotEmpty &&
+                    local.first['status'] == IdeaStatus.implemented.dbValue
+                ? local.first['implemented_at']
+                : null;
+          }
           final remoteTime = DateTime.parse(remote['updated_at']! as String);
           final localTime = local.isEmpty
               ? null
@@ -788,6 +811,7 @@ class SqliteAppRepository implements AppRepository {
                   'attachments': e.attachments.map((a) => a.fileName).toList(),
                   'createdAt': e.createdAt.toIso8601String(),
                   'updatedAt': e.updatedAt.toIso8601String(),
+                  'implementedAt': e.implementedAt?.toIso8601String(),
                 },
               )
               .toList(),

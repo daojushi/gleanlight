@@ -66,12 +66,14 @@ class Idea {
     required this.status,
     required this.createdAt,
     required this.updatedAt,
+    this.implementedAt,
     this.topics = const [],
     this.attachments = const [],
   });
   final String id;
   final String content;
   final IdeaStatus status;
+  final DateTime? implementedAt;
   final DateTime createdAt;
   final DateTime updatedAt;
   final List<Topic> topics;

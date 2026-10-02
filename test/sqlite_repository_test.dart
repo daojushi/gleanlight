@@ -19,6 +19,51 @@ Future<SqliteAppRepository> repository() async {
 }
 
 void main() {
+  test(
+    'Idea implementation time survives edits and resets on reopening',
+    () async {
+      final repo = await repository();
+      try {
+        final id = await repo.saveIdea(
+          content: '想法',
+          status: IdeaStatus.newIdea,
+          topicIds: [],
+        );
+        final created = (await repo.listIdeas()).single.createdAt;
+        await repo.saveIdea(
+          id: id,
+          content: '实现',
+          status: IdeaStatus.implemented,
+          topicIds: [],
+        );
+        final completed = (await repo.listIdeas()).single.implementedAt;
+        expect(completed, isNotNull);
+        await repo.saveIdea(
+          id: id,
+          content: '补充内容',
+          status: IdeaStatus.implemented,
+          topicIds: [],
+        );
+        final edited = (await repo.listIdeas()).single;
+        expect(edited.createdAt, created);
+        expect(edited.implementedAt, completed);
+        final snapshot = await repo.exportSyncSnapshot();
+        expect(
+          (snapshot['ideas'] as List).single['implemented_at'],
+          completed!.toUtc().toIso8601String(),
+        );
+        await repo.saveIdea(
+          id: id,
+          content: '重新实践',
+          status: IdeaStatus.ready,
+          topicIds: [],
+        );
+        expect((await repo.listIdeas()).single.implementedAt, isNull);
+      } finally {
+        await repo.close();
+      }
+    },
+  );
   test('Idea supports long content and soft deletion', () async {
     final repo = await repository();
     await repo.saveIdea(

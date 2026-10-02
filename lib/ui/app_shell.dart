@@ -1034,11 +1034,15 @@ class HistoryIdeasPage extends StatelessWidget {
         controller.ideas
             .where((idea) => idea.status == IdeaStatus.implemented)
             .toList()
-          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+          ..sort(
+            (a, b) => (b.implementedAt ?? b.updatedAt).compareTo(
+              a.implementedAt ?? a.updatedAt,
+            ),
+          );
     return PageFrame(
       kicker: 'HISTORY',
       title: '历史灵感',
-      subtitle: '${history.length} 条已实现想法 · 最近更新的在最上方',
+      subtitle: '${history.length} 条已实现想法 · 最近实现的在最上方',
       child: SearchFilter(
         topics: controller.topics,
         statuses: const [],
@@ -1087,7 +1091,8 @@ class HistoryIdeasPage extends StatelessWidget {
                           },
                           topics: idea.topics,
                           trailing:
-                              '更新于 ${DateFormat('MM/dd HH:mm').format(idea.updatedAt.toLocal())}',
+                              '创建于 ${DateFormat('yyyy/MM/dd HH:mm').format(idea.createdAt.toLocal())}\n'
+                              '${idea.implementedAt == null ? '实现时间：未记录（旧数据）' : '实现于 ${DateFormat('yyyy/MM/dd HH:mm').format(idea.implementedAt!.toLocal())}'}',
                           onEdit: () => showIdeaDialog(
                             context,
                             controller,
