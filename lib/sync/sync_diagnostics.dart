@@ -41,10 +41,10 @@ Future<int> probeSyncHttp(
 }
 
 Future<String> diagnoseSync(SyncConfig config, SupabaseClient? client) async {
-  if (!config.enabled) return '项目地址或密钥未配置，请先保存正确配置并重启。';
+  if (!config.enabled) return '项目地址或密钥未配置，请先保存正确配置。';
   final base = Uri.parse(SyncConfig.normalizeUrl(config.url));
   final lines = <String>[
-    '同步诊断 1.3.5 · ${Platform.operatingSystem}',
+    '同步诊断 · ${Platform.operatingSystem}',
     '网络组件：${Platform.isAndroid ? '内置 Chromium Cronet' : 'Dart HTTP'}',
     '项目：${base.host}',
   ];
@@ -73,7 +73,7 @@ Future<String> diagnoseSync(SyncConfig config, SupabaseClient? client) async {
     return 'HTTP $status${status == 200 ? '，通过' : '，服务未通过健康检查'}';
   });
   if (client == null) {
-    lines.add('APP 未加载云端配置，请重启后再诊断。');
+    lines.add('APP 未加载云端配置，请重新保存配置后再诊断。');
     return lines.join('\n\n');
   }
   Session? session;

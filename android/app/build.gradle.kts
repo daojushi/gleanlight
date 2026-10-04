@@ -29,6 +29,18 @@ android {
         versionName = flutter.versionName
     }
 
+    // Reuse the original device-update key when it is supplied locally.
+    // The key is deliberately excluded from version control.
+    val existingDebugKeystore = rootProject.file("../debug.keystore")
+    if (existingDebugKeystore.exists()) {
+        signingConfigs.getByName("debug") {
+            storeFile = existingDebugKeystore
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

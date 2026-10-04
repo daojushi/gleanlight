@@ -31,7 +31,13 @@ class SqliteAppRepository implements AppRepository {
         final oldPath = row['local_path']! as String;
         await txn.update(
           'attachments',
-          {'local_path': p.join(root, 'attachments', p.basename(oldPath))},
+          {
+            'local_path': p.join(
+              root,
+              'attachments',
+              p.posix.basename(oldPath.replaceAll('\\', '/')),
+            ),
+          },
           where: 'id=?',
           whereArgs: [row['id']],
         );

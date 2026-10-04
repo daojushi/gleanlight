@@ -7,13 +7,16 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:intl/intl.dart';
 import 'package:pasteboard/pasteboard.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../app/app_controller.dart';
 import '../app/appearance_settings.dart';
 import '../domain/models.dart';
+import '../domain/idea_history.dart';
 import '../sync/sync_config.dart';
 import '../sync/sync_diagnostics.dart';
 import '../sync/sync_provider.dart';
+import 'idea_activity_calendar.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -97,11 +100,43 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _export() async {
+    final fileName =
+        'its-backup-${DateFormat('yyyyMMdd-HHmm').format(DateTime.now())}.zip';
+    if (Platform.isAndroid) {
+      Directory? temporary;
+      try {
+        temporary = await (await getTemporaryDirectory()).createTemp(
+          'its-backup-',
+        );
+        final output = await c.exportBackup(
+          '${temporary.path}${Platform.pathSeparator}$fileName',
+        );
+        final saved = await FilePicker.saveFile(
+          fileName: fileName,
+          bytes: await File(output).readAsBytes(),
+          mimeType: 'application/zip',
+          dialogTitle: '保存拾光备份',
+        );
+        if (saved != null && mounted) message('备份已导出');
+      } catch (error) {
+        if (mounted) message('备份导出失败：$error');
+      } finally {
+        // Only remove the directory created for this export. Cleanup must not
+        // turn a successfully saved backup into a failed operation.
+        if (temporary != null) {
+          try {
+            await temporary.delete(recursive: true);
+          } on FileSystemException {
+            // The app cache can be cleaned by Android later.
+          }
+        }
+      }
+      return;
+    }
     final directory = await FilePicker.getDirectoryPath(dialogTitle: '选择备份目录');
     if (directory == null) return;
     final separator = Platform.pathSeparator;
-    final path =
-        '$directory${separator}its-backup-${DateFormat('yyyyMMdd-HHmm').format(DateTime.now())}.zip';
+    final path = '$directory$separator$fileName';
     try {
       final output = await c.exportBackup(
         path.toLowerCase().endsWith('.zip') ? path : '$path.zip',
@@ -231,6 +266,20 @@ class _AppShellState extends State<AppShell> {
               tooltip: '设置',
               onPressed: () => setState(() => index = 6),
               icon: const Icon(Icons.settings_outlined),
+            ),
+            PopupMenuButton<String>(
+              tooltip: '备份',
+              onSelected: (value) async {
+                if (value == 'export') {
+                  await _export();
+                } else {
+                  await _import();
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'export', child: Text('导出备份')),
+                PopupMenuItem(value: 'import', child: Text('导入备份')),
+              ],
             ),
           ],
         ),
@@ -1019,7 +1068,7 @@ class IdeasPage extends StatelessWidget {
   );
 }
 
-class HistoryIdeasPage extends StatelessWidget {
+class HistoryIdeasPage extends StatefulWidget {
   const HistoryIdeasPage({
     super.key,
     required this.controller,
@@ -1029,25 +1078,29 @@ class HistoryIdeasPage extends StatelessWidget {
   final void Function(Object) onMessage;
 
   @override
+  State<HistoryIdeasPage> createState() => _HistoryIdeasPageState();
+}
+
+class _HistoryIdeasPageState extends State<HistoryIdeasPage> {
+  IdeaHistorySort order = IdeaHistorySort.implementedNewest;
+  bool showCalendar = true;
+  AppController get controller => widget.controller;
+  void onMessage(Object message) => widget.onMessage(message);
+
+  @override
   Widget build(BuildContext context) {
-    final history =
-        controller.ideas
-            .where((idea) => idea.status == IdeaStatus.implemented)
-            .toList()
-          ..sort(
-            (a, b) => (b.implementedAt ?? b.updatedAt).compareTo(
-              a.implementedAt ?? a.updatedAt,
-            ),
-          );
+    final historyCount = controller.ideas
+        .where((idea) => idea.status == IdeaStatus.implemented)
+        .length;
     return PageFrame(
       kicker: 'HISTORY',
       title: '历史灵感',
-      subtitle: '${history.length} 条已实现想法 · 最近实现的在最上方',
+      subtitle: '$historyCount 条已实现想法 · ${order.description}',
       child: SearchFilter(
         topics: controller.topics,
         statuses: const [],
         builder: (query, topic, _) {
-          final items = history
+          final matchingIdeas = controller.ideas
               .where(
                 (idea) =>
                     (query.isEmpty ||
@@ -1056,15 +1109,19 @@ class HistoryIdeasPage extends StatelessWidget {
                         idea.topics.any((item) => item.id == topic)),
               )
               .toList();
-          return items.isEmpty
-              ? const EmptyCard(
-                  title: '还没有历史灵感',
-                  subtitle: '将灵感状态改为“已实现”后，会自动出现在这里。',
+          final items = sortIdeaHistory(matchingIdeas, order);
+          final list = items.isEmpty
+              ? EmptyCard(
+                  title: historyCount == 0 ? '还没有历史灵感' : '没有匹配的历史灵感',
+                  subtitle: historyCount == 0
+                      ? '将灵感状态改为“已实现”后，会自动出现在这里。'
+                      : '尝试调整搜索或 Topic 筛选条件。',
                 )
               : Column(
                   children: items
                       .map(
                         (idea) => EntityCard(
+                          key: ValueKey('history-idea-${idea.id}'),
                           title: idea.content,
                           markdown: true,
                           onCopy: () async {
@@ -1110,6 +1167,98 @@ class HistoryIdeasPage extends StatelessWidget {
                       )
                       .toList(),
                 );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 240,
+                    child: DropdownButtonFormField<IdeaHistorySort>(
+                      key: const ValueKey('history-sort'),
+                      initialValue: order,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: '排序方式',
+                        prefixIcon: Icon(Icons.sort),
+                        isDense: true,
+                      ),
+                      items: IdeaHistorySort.values
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(
+                                value.label,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) setState(() => order = value);
+                      },
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        setState(() => showCalendar = !showCalendar),
+                    icon: Icon(
+                      showCalendar
+                          ? Icons.calendar_month
+                          : Icons.calendar_month_outlined,
+                    ),
+                    label: Text(showCalendar ? '收起日历' : '显示日历'),
+                  ),
+                  Text(
+                    '显示 ${items.length} 条',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                ],
+              ),
+              if (!order.byCreation &&
+                  items.any((idea) => idea.implementedAt == null)) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  '未记录实现时间的旧数据排在最后。',
+                  style: TextStyle(color: Colors.black54, fontSize: 12),
+                ),
+              ],
+              const SizedBox(height: 16),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  if (!showCalendar) return list;
+                  final calendar = IdeaActivityCalendar(ideas: matchingIdeas);
+                  if (constraints.maxWidth >= 900) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: list),
+                        const SizedBox(width: 20),
+                        SizedBox(width: 336, child: calendar),
+                      ],
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 420),
+                          child: calendar,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      list,
+                    ],
+                  );
+                },
+              ),
+            ],
+          );
         },
       ),
     );

@@ -11,3 +11,7 @@ build/
 coverage/
 *.iml
 .idea/
+*.keystore
+*.jks
+debug.store
+android/key.properties
